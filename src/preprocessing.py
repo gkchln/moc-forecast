@@ -36,7 +36,7 @@ class GMEPreprocessor:
         qty_unit (str, optional): Quantity unit for curves. Defaults to 'GW'.
     """
     def __init__(self, market='MGP', clip_price=(0, 500), qty_unit='GW', pool=None, price_domain=(0, 300), n_prices=301,
-                 float_precision='float16'):
+                 float_precision='float32'):
         self.market = market
         self.clip_price = clip_price
         self.qty_unit = qty_unit
