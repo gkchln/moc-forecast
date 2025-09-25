@@ -188,7 +188,7 @@ class SupplyDemandTimeSeries:
             self.demand.copy()
         )
     
-    def to_pickle(self, path: str):
+    def to_pickle(self, path: str, verbose=False):
         if not path.endswith('.pkl'):
             logging.warning("It's recommended to provide a path with a .pkl (pickle) extension.")
         if not os.path.isdir(os.path.dirname(path)):
@@ -196,7 +196,8 @@ class SupplyDemandTimeSeries:
         else:
             with open(path, 'wb') as f:
                 pickle.dump(self, f)
-            logging.info(f"SupplyDemandTimeSeries saved to {path}")
+            if verbose:
+                logging.info(f"SupplyDemandTimeSeries saved to {path}")
 
 
         
@@ -264,7 +265,7 @@ class SupplyDemandTimeSeries:
 
         return fig
     
-    def get_clearing_prices(self, return_series=True, verbose=True):
+    def get_clearing_prices(self, return_series=True, verbose=True, return_dtype=np.float16):
         """
         Compute the market clearing prices for each timestamp by finding the intersection between supply and demand curves.
         The method iterates over all available timestamps, computes the difference between supply and demand volumes,
@@ -292,7 +293,7 @@ class SupplyDemandTimeSeries:
         if return_series:
             return pd.Series(clearing_prices, index=self.timestamps)
         else:
-            return np.array(clearing_prices, dtype=np.float16)
+            return np.array(clearing_prices, dtype=return_dtype)
         
     def smooth(self, bandwidth: int):
         """Smooths the provided SDTS with Kernel Smoothing
@@ -399,6 +400,31 @@ class SupplyDemandTimeSeries:
         new_demand.extrapolation = self.demand.extrapolation
 
         return SupplyDemandTimeSeries(new_supply, new_demand)
+    
+
+    def get_naive_forecast(self) -> "SupplyDemandTimeSeries":
+        """
+        Return a naive forecast SupplyDemandTimeSeries:
+        - For each timestamp, forecast is the value at the same hour 7 days before if it's Monday, Saturday, or Sunday.
+        - Otherwise, forecast is the value at the same hour the day before.
+        - The returned SDTS starts 7 days after the first timestamp (to ensure past data is available).
+        """
+        timestamps = pd.DatetimeIndex(self.timestamps)
+        forecast_start = timestamps[0] + pd.Timedelta(days=7)  # We cannot have forecast for those before
+        timestamps_to_forecast = timestamps[timestamps >= forecast_start]
+        lookup_idxs = []
+
+        for i, ts in enumerate(timestamps_to_forecast):
+            weekday = ts.weekday()
+            ref_ts = ts - pd.Timedelta(days=7) if weekday in [0, 5, 6] else ts - pd.Timedelta(days=1)
+            lookup_idxs.append(timestamps.get_loc(ref_ts))
+
+        sdts_pred = self.copy()
+        sdts_pred = sdts_pred[forecast_start:]
+        sdts_pred.supply.data_matrix = self.supply.data_matrix[lookup_idxs, ...]
+        sdts_pred.demand.data_matrix = self.demand.data_matrix[lookup_idxs, ...]
+
+        return sdts_pred
 
 
 
