@@ -5,11 +5,13 @@ import numpy as np
 import pandas as pd
 import datetime
 import logging
+import warnings
 from typing import Dict
 from tqdm import tqdm
 import calendar
-from sklearn.linear_model import LassoLarsIC, Lasso
+from sklearn.linear_model import LassoLarsIC, Lasso, LassoCV
 from sklearn.preprocessing import StandardScaler
+from sklearn.exceptions import ConvergenceWarning
 from src.curves import SupplyDemandTimeSeries, ScoresData
 from src.preprocessing import ExogPreprocessor
 from joblib import Parallel, delayed
@@ -23,9 +25,12 @@ valid_var_structures = [
     None,
     'full',
     'concurrent',
-    'lag1_full'
 ]
 
+valid_exog_structures = [
+    'full',
+    'concurrent'
+]
 
 class LassoVARX:
     """
@@ -41,17 +46,41 @@ class LassoVARX:
     Raises:
         ValueError: If `ar_structure` is not 'full' or 'concurrent' or if `var_structure` is not None, 'concurrent', 'lag1_full', or 'full'.
     """
-    def __init__(self, ar_structure='full', var_structure=None, calibration_window=datetime.timedelta(days=358), criterion='aic', max_iter=2500, n_jobs=1):
+    def __init__(
+            self,
+            lags_endogs=[1, 7],
+            lags_exog=[0],
+            ar_structure='full',
+            var_structure=None,
+            exog_structure='concurrent',
+            daytype_dummies=['is_Holiday', 'is_Monday', 'is_Saturday'],
+            calibration_window=datetime.timedelta(days=358),
+            criterion='aic',
+            max_iter=2500,
+            tol=1e-4,
+            n_jobs=1,
+            show_features=False,
+            ignore_convergence_warnings=True
+        ):
         if ar_structure not in valid_ar_structures:
             raise ValueError(f"ar_structure must be one of {valid_ar_structures}")
         if var_structure not in valid_var_structures:
             raise ValueError(f"var_structure must be one of {valid_var_structures}")
+        if exog_structure not in valid_exog_structures:
+            raise ValueError(f"exog_structure must be one of {valid_exog_structures}")
         self.calibration_window = calibration_window
+        self.lags_endogs = lags_endogs
+        self.lags_exog = lags_exog
+        self.daytype_dummies = daytype_dummies
         self.ar_structure = ar_structure
         self.var_structure = var_structure
-        self.criterion = criterion
+        self.exog_structure = exog_structure
+        self.criterion = criterion # Can be 'aic' or 'bic' (LarsIC) or 'cv' LassoCV
         self.max_iter = max_iter
+        self.tol = tol
         self.n_jobs = n_jobs
+        self.ignore_convergence_warnings = ignore_convergence_warnings
+        self.show_features = show_features
 
     def _build_XY(self, endog, exog):
         """
@@ -76,6 +105,19 @@ class LassoVARX:
         Xs = {}
         Ys = {}
 
+        X_lagged = {}
+        for h in range(24):
+            X_h = exog[exog.index.hour == h]
+            X_h_lagged_list = []
+            for lag in self.lags_exog:
+                if lag == 0:
+                    X_h_lagged_list.append(X_h.rename(columns=lambda x: f"{x}_h{h}" if x not in self.daytype_dummies else x))
+                else:
+                    X_h_lagged_list.append(X_h.drop(self.daytype_dummies, axis=1).shift(lag).rename(columns=lambda x: f"{x}_h{h}_L{lag}"))
+            X_h_lagged = pd.concat(X_h_lagged_list, axis=1)
+            X_h_lagged.index = X_h_lagged.index.date
+            X_lagged[h] = X_h_lagged
+
         for var in endog.columns:
             # Build Y
             target_df = endog[var].reset_index()
@@ -90,44 +132,53 @@ class LassoVARX:
             Xs[var] = {}
 
             for h in range(24):
+                if self.exog_structure == 'concurrent':
+                    X_h = X_lagged[h]
+                elif self.exog_structure == 'full':
+                    # We drop the daytype dummies for the other hours to avoid duplicates
+                    X_h = pd.concat([X_lagged[j] if j == h else X_lagged[j].drop(self.daytype_dummies, axis=1) for j in range(24)], axis=1)
+                else:
+                    raise ValueError("exog_structure must be either 'concurrent' or 'full'")
 
-                X_h = exog[exog.index.hour == h]
-                X_h.index = X_h.index.date
-                Y_l1 = target_df.shift(1)
-                Y_l7 = target_df.shift(7)
-                Y_l1.columns = [f"{var}_h{j}_L1" for j in range(24)]
-                Y_l7.columns = [f"{var}_h{j}_L7" for j in range(24)]
+                Y_lagged = {}
+                for lag in self.lags_endogs:
+                    Y_lagged[lag] = target_df.shift(lag)
+                    Y_lagged[lag].columns = [f"{var}_h{j}_L{lag}" for j in range(24)]
                 
                 if self.ar_structure == 'concurrent': # Only keep the lags for the current hour
-                    Y_l1 = Y_l1.loc[:, [f"{var}_h{h}_L1"]]
-                    Y_l7 = Y_l7.loc[:, [f"{var}_h{h}_L7"]]
+                    for lag in self.lags_endogs:
+                        Y_lagged[lag] = Y_lagged[lag].loc[:, [f"{var}_h{h}_L{lag}"]]
 
-                Xs[var][h] = pd.concat([X_h, Y_l1, Y_l7], axis=1).dropna()
+                Xs[var][h] = pd.concat([X_h] + [Y_lagged[lag] for lag in self.lags_endogs], axis=1).iloc[7:, :]
 
-        if self.var_structure is not None: # We add the lags 1 and 7 of all components of Y for the concurrent hour
-            for y_target in endog.columns:
+        if self.var_structure is not None: # We add the lags of all components of Y
+            for i, y_target in enumerate(endog.columns):
                 for h in range(24):
                     other_y = [y_feature for y_feature in endog.columns if y_feature != y_target]
                     for y_feature in other_y:
                         if self.var_structure == 'concurrent':
-                            var_terms = [f"{y_feature}_h{h}_L1", f"{y_feature}_h{h}_L7"]
-                        elif self.var_structure == 'lag1_full':
-                            var_terms = [f"{y_feature}_h{j}_L1" for j in range(24)] + [f"{y_feature}_h{h}_L7"]
+                            var_terms = [f"{y_feature}_h{h}_L{lag}" for lag in self.lags_endogs]
                         elif self.var_structure == 'full':
-                            var_terms = [f"{y_feature}_h{j}_L1" for j in range(24)] + [f"{y_feature}_h{j}_L7" for j in range(24)]
+                            var_terms = [f"{y_feature}_h{j}_L{lag}" for j in range(24) for lag in self.lags_endogs]
 
                         Xs[y_target][h] = pd.concat([Xs[y_target][h], Xs[y_feature][h].loc[:, var_terms]], axis=1)
+
+                    if self.show_features:
+                        if (i == 0) & (h == 0):
+                            features = Xs[y_target][h].columns
+                            logging.info(f"{len(features)} features for {y_target} hour {h}: {features}")
+
 
         return Ys, Xs
     
     @staticmethod
-    def _fit_single_hour(X, Y, h, criterion, max_iter):
+    def _fit_single_hour(X, Y, h, criterion, max_iter, tol):
         # Estimate lambda with LARS
         param_model = LassoLarsIC(criterion=criterion, max_iter=max_iter)
         param = param_model.fit(X, Y.loc[:, h]).alpha_
 
         # Fit LassoVARX
-        model = Lasso(max_iter=max_iter, alpha=param)
+        model = Lasso(max_iter=max_iter, alpha=param, tol=tol)
         model.fit(X, Y.loc[:, h])
         return h, model
 
@@ -147,7 +198,7 @@ class LassoVARX:
             Xdict, Y = Xs[var], Ys[var]
 
             results = Parallel(n_jobs=self.n_jobs)(
-                delayed(self._fit_single_hour)(Xdict[h], Y, h, self.criterion, self.max_iter) for h in range(24)
+                delayed(self._fit_single_hour)(Xdict[h], Y, h, self.criterion, self.max_iter, self.tol) for h in range(24)
             )
 
             # Collect results into a dict
@@ -171,14 +222,21 @@ class LassoVARX:
 
                 X = Xs[var][h]
                 Y = Ys[var]
+                with warnings.catch_warnings():
+                    if self.ignore_convergence_warnings:
+                        warnings.filterwarnings("ignore", category=ConvergenceWarning)
 
-                # Estimating lambda hyperparameter using LARS
-                param_model = LassoLarsIC(criterion=self.criterion, max_iter=self.max_iter)
-                param = param_model.fit(X, Y.loc[:, h]).alpha_
-
-                # Fitting LassoVARX using standard LASSO estimation technique
-                model = Lasso(max_iter=self.max_iter, alpha=param)
-                model.fit(X, Y.loc[:, h])
+                    if self.criterion != 'cv':
+                        if X.shape[1] > X.shape[0]:
+                            raise ValueError(f"Cannot use criterion '{self.criterion}' when number of features ({X.shape[1]}) is greater \
+                                            than number of samples ({X.shape[0]}). Consider using 'cv' instead.")
+                        param_model = LassoLarsIC(criterion=self.criterion, max_iter=self.max_iter)
+                        param = param_model.fit(X, Y.loc[:, h]).alpha_
+                        # Fitting LassoVARX using standard LASSO estimation technique
+                        model = Lasso(alpha=param, max_iter=self.max_iter, tol=self.tol)
+                    else:
+                        model = LassoCV(alphas=100, cv=12, max_iter=self.max_iter, n_jobs=self.n_jobs, tol=self.tol)
+                    model.fit(X, Y.loc[:, h])
 
                 self.models[var][h] = model
 
@@ -224,41 +282,6 @@ class LassoVARX:
 
         return Y
 
-
-    
-    def fit_forecast(self, endog: pd.DataFrame, exog: pd.DataFrame, test_start: datetime.date, verbose=True):
-        """
-        Fit the model on the training data (period up to test_start) and performs rolling one-step ahead forecasts of all hours of the day simultaneously
-        using the fitted model. The model is trained on the data from the calibration window before the test_start date and forecasts the values
-        for the test period (from test_start to the end of the dataset).
-
-        Args:
-            endog (pd.DataFrame): The target multivariate hourly time series to forecast. Must have a valid datetime index.
-            exog (pd.DataFrame): The exogenous multivariate time series to forecast endog. Must have a datetime index aligned with endog.
-            test_start (datetime.date): The start of the test period for which the model will forecast.
-            verbose (bool, optional): If True, log training and forecasting periods. Defaults to True.
-        Returns:
-            pd.DataFrame: An hourly datetime-indexed dataframe containing the forecasted values for the test period.
-        """
-        # The time delta of one week is because we need 7 days of past data for the building the lagged features
-        if pd.Timestamp(test_start - datetime.timedelta(weeks=1) - self.calibration_window) < endog.index[0]:
-            raise ValueError("test_start must be at least calibration_window after the start of the dataset")
-        
-        index_test = endog.index.date >= test_start - datetime.timedelta(weeks=1)
-        index_train = (endog.index.date < test_start) & (endog.index.date >= test_start - datetime.timedelta(weeks=1) - self.calibration_window)
-        Ys_train, Xs_train = self._build_XY(endog.loc[index_train, :], exog.loc[index_train, :])
-        one_random_Y_train = next(iter(Ys_train.values()))
-        if verbose:
-            logging.info("Training period is from {} to {}".format(one_random_Y_train.index[0], one_random_Y_train.index[-1]))
-        Ys_test, Xs_test = self._build_XY(endog.loc[index_test, :], exog.loc[index_test, :])
-        one_random_Y_test = next(iter(Ys_test.values()))
-        if verbose:
-            logging.info("Forecasting period is from {} to {}".format(one_random_Y_test.index[0], one_random_Y_test.index[-1]))
-        self.fit(Xs_train, Ys_train)
-        Ys_pred = self.predict(Xs_test)
-        Y_pred = self.flatten_Ys(Ys_pred)
-
-        return Y_pred
     
     
     def _fit_forecast_from_XY(self, Ys: Dict[str, pd.DataFrame], Xs: Dict[str, Dict[int, pd.DataFrame]], test_start: datetime.date, verbose=True):
@@ -285,6 +308,25 @@ class LassoVARX:
         Y_pred = self.flatten_Ys(Ys_pred)
 
         return Y_pred
+    
+
+    def fit_forecast(self, endog: pd.DataFrame, exog: pd.DataFrame, test_start: datetime.date, verbose=True):
+        """
+        Fit the model on the training data (period up to test_start) and performs rolling one-step ahead forecasts of all hours of the day simultaneously
+        using the fitted model. The model is trained on the data from the calibration window before the test_start date and forecasts the values
+        for the test period (from test_start to the end of the dataset).
+
+        Args:
+            endog (pd.DataFrame): The target multivariate hourly time series to forecast. Must have a valid datetime index.
+            exog (pd.DataFrame): The exogenous multivariate time series to forecast endog. Must have a datetime index aligned with endog.
+            test_start (datetime.date): The start of the test period for which the model will forecast.
+            verbose (bool, optional): If True, log training and forecasting periods. Defaults to True.
+        Returns:
+            pd.DataFrame: An hourly datetime-indexed dataframe containing the forecasted values for the test period.
+        """
+        Ys, Xs = self._build_XY(endog, exog)
+
+        return self._fit_forecast_from_XY(Ys, Xs, test_start, verbose=verbose)
     
 
     def forecast(self, endog, exog):
@@ -420,16 +462,24 @@ class SupplyDemandForecaster:
         return sd_pred
 
 
-    def fit_forecast_daily_recal(
+    def fit_forecast(
             self,
             sd: SupplyDemandTimeSeries,
             exog: pd.DataFrame,
             test_start: datetime.date,
+            recalibration: str = None,
             correct: bool = True
         ) -> SupplyDemandTimeSeries:
         endog = self._transform_endog(sd)
         exog_transformed = self._transform_exog(exog, self.preprocessor.dummy_columns)
-        endog_pred = self.model.fit_forecast_daily_recal(endog, exog_transformed, test_start)
+        if recalibration is None:
+            endog_pred = self.model.fit_forecast(endog, exog_transformed, test_start)
+        elif recalibration == 'daily':
+            endog_pred = self.model.fit_forecast_daily_recal(endog, exog_transformed, test_start)
+        elif recalibration == 'monthly':
+            endog_pred = self.model.fit_forecast_monthly_recal(endog, exog_transformed, test_start)
+        else:
+            raise ValueError("recalibration must be either None, 'daily' or 'monthly'")
         sd_pred = self._inverse_transform_pred(endog_pred)
         if correct:
             sd_pred = sd_pred.correct_monotonicity()
