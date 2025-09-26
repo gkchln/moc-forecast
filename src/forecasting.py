@@ -5,12 +5,14 @@ import numpy as np
 import pandas as pd
 import datetime
 import logging
+from typing import Dict
 from tqdm import tqdm
 import calendar
 from sklearn.linear_model import LassoLarsIC, Lasso
 from sklearn.preprocessing import StandardScaler
 from src.curves import SupplyDemandTimeSeries, ScoresData
 from src.preprocessing import ExogPreprocessor
+from joblib import Parallel, delayed
 
 valid_ar_structures = [
     'full',
@@ -23,6 +25,7 @@ valid_var_structures = [
     'concurrent',
     'lag1_full'
 ]
+
 
 class LassoVARX:
     """
@@ -38,7 +41,7 @@ class LassoVARX:
     Raises:
         ValueError: If `ar_structure` is not 'full' or 'concurrent' or if `var_structure` is not None, 'concurrent', 'lag1_full', or 'full'.
     """
-    def __init__(self, ar_structure='full', var_structure=None, calibration_window=datetime.timedelta(days=358)):
+    def __init__(self, ar_structure='full', var_structure=None, calibration_window=datetime.timedelta(days=358), criterion='aic', max_iter=2500, n_jobs=1):
         if ar_structure not in valid_ar_structures:
             raise ValueError(f"ar_structure must be one of {valid_ar_structures}")
         if var_structure not in valid_var_structures:
@@ -46,6 +49,9 @@ class LassoVARX:
         self.calibration_window = calibration_window
         self.ar_structure = ar_structure
         self.var_structure = var_structure
+        self.criterion = criterion
+        self.max_iter = max_iter
+        self.n_jobs = n_jobs
 
     def _build_XY(self, endog, exog):
         """
@@ -113,8 +119,41 @@ class LassoVARX:
                         Xs[y_target][h] = pd.concat([Xs[y_target][h], Xs[y_feature][h].loc[:, var_terms]], axis=1)
 
         return Ys, Xs
+    
+    @staticmethod
+    def _fit_single_hour(X, Y, h, criterion, max_iter):
+        # Estimate lambda with LARS
+        param_model = LassoLarsIC(criterion=criterion, max_iter=max_iter)
+        param = param_model.fit(X, Y.loc[:, h]).alpha_
+
+        # Fit LassoVARX
+        model = Lasso(max_iter=max_iter, alpha=param)
+        model.fit(X, Y.loc[:, h])
+        return h, model
 
     
+    def _fit_parallel(self, Xs, Ys):
+        """ 
+        Fit the LassoVARX model to the provided endogenous and exogenous data.
+        This method estimates the model parameters for each hour of the day using Lasso regression with BIC for tuning the regularization parameter.
+
+        Args:
+            Xs (dict): Second output of self._build_XY(). A dictionary where keys are endogenous variable names and values are dictionaries with hours as keys and dataframes as values.
+            Ys (dict): First output of self._build_XY(). A dictionary where keys are endogenous variable names and values are dataframes of target variables.
+        """
+        self.models = {}
+
+        for var in Ys.keys():
+            Xdict, Y = Xs[var], Ys[var]
+
+            results = Parallel(n_jobs=self.n_jobs)(
+                delayed(self._fit_single_hour)(Xdict[h], Y, h, self.criterion, self.max_iter) for h in range(24)
+            )
+
+            # Collect results into a dict
+            self.models[var] = dict(results)
+
+
     def fit(self, Xs, Ys):
         """ 
         Fit the LassoVARX model to the provided endogenous and exogenous data.
@@ -134,11 +173,11 @@ class LassoVARX:
                 Y = Ys[var]
 
                 # Estimating lambda hyperparameter using LARS
-                param_model = LassoLarsIC(criterion='bic', max_iter=2500)
+                param_model = LassoLarsIC(criterion=self.criterion, max_iter=self.max_iter)
                 param = param_model.fit(X, Y.loc[:, h]).alpha_
 
                 # Fitting LassoVARX using standard LASSO estimation technique
-                model = Lasso(max_iter=2500, alpha=param)
+                model = Lasso(max_iter=self.max_iter, alpha=param)
                 model.fit(X, Y.loc[:, h])
 
                 self.models[var][h] = model
@@ -184,6 +223,8 @@ class LassoVARX:
         Y = pd.concat(df_list, axis=1)
 
         return Y
+
+
     
     def fit_forecast(self, endog: pd.DataFrame, exog: pd.DataFrame, test_start: datetime.date, verbose=True):
         """
@@ -213,6 +254,32 @@ class LassoVARX:
         one_random_Y_test = next(iter(Ys_test.values()))
         if verbose:
             logging.info("Forecasting period is from {} to {}".format(one_random_Y_test.index[0], one_random_Y_test.index[-1]))
+        self.fit(Xs_train, Ys_train)
+        Ys_pred = self.predict(Xs_test)
+        Y_pred = self.flatten_Ys(Ys_pred)
+
+        return Y_pred
+    
+    
+    def _fit_forecast_from_XY(self, Ys: Dict[str, pd.DataFrame], Xs: Dict[str, Dict[int, pd.DataFrame]], test_start: datetime.date, verbose=True):
+        """Private method for performing fit_forecast from the XY form"""
+        index = next(iter(Ys.values())).index
+        if test_start - self.calibration_window < index[0]:
+            raise ValueError("test_start must be at least calibration_window after the start of the dataset")
+        
+        select_train = (index < test_start) & (index >= test_start - self.calibration_window)
+        select_test = index >= test_start
+        
+        Ys_train = {var: Y.loc[select_train, :] for var, Y in Ys.items()}
+        # Ys_test = {var: Y.loc[select_test, :] for var, Y in Ys.items()}
+
+        Xs_train = {var: {h: X.loc[select_train, :] for h, X in X_hours.items()} for var, X_hours in Xs.items()}
+        Xs_test = {var: {h: X.loc[select_test, :] for h, X in X_hours.items()} for var, X_hours in Xs.items()}
+
+        if verbose:
+            logging.info("Training period is from {} to {}".format(index[select_train][0], index[select_train][-1]))
+            logging.info("Forecasting period is from {} to {}".format(index[select_test][0], index[select_test][-1]))
+
         self.fit(Xs_train, Ys_train)
         Ys_pred = self.predict(Xs_test)
         Y_pred = self.flatten_Ys(Ys_pred)
@@ -281,16 +348,23 @@ class LassoVARX:
         """
         Y_preds = []
         end_datetime = endog.index[-1]
+        end_date = end_datetime.date()
         num_days = (end_datetime - pd.Timestamp(test_start)).days + 1
+
+        Ys, Xs = self._build_XY(endog, exog)
         
         for i in tqdm(range(num_days), desc="Daily Recalibration Progress"):
-            current_datetime = pd.Timestamp(test_start) + pd.Timedelta(days=i)
-            horizon = current_datetime + pd.Timedelta(days=1) - pd.Timedelta(hours=1)
-
-            if horizon <= end_datetime:
-                Y_pred = self.fit_forecast(endog[:horizon], exog[:horizon], current_datetime.date(), verbose=verbose)
+            forecast_date = test_start + pd.Timedelta(days=i)
+            # Here we use the private method _fit_forecast_from_XY() to avoid rebuilding everytime Xs and Ys (which is expensive)
+            if forecast_date <= end_date:
+                horizon = forecast_date
             else:
-                Y_pred = self.fit_forecast(endog[:end_datetime], exog[:end_datetime], current_datetime.date(), verbose=verbose)
+                horizon = end_date
+
+            Ys_new = {var: Y[:horizon] for var, Y in Ys.items()}
+            Xs_new = {var: {h: X[:horizon] for h, X in X_hours.items()} for var, X_hours in Xs.items()}
+
+            Y_pred = self._fit_forecast_from_XY(Ys_new, Xs_new, horizon, verbose=verbose)
 
             Y_preds.append(Y_pred)
             # print("Daily recalibration complete for {}".format(current_datetime.date()))
