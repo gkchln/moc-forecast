@@ -217,9 +217,9 @@ class LassoVARX:
         return Ys, Xs
     
     @staticmethod
-    def _fit_single_hour(X, Y, h, criterion, max_iter, tol):
+    def _fit_single_hour(X, Y, h, criterion, max_iter, tol, random_state):
         # Estimate lambda with LARS
-        param_model = LassoLarsIC(criterion=criterion, max_iter=max_iter)
+        param_model = LassoLarsIC(criterion=criterion, max_iter=max_iter, random_state=random_state)
         param = param_model.fit(X, Y.loc[:, h]).alpha_
 
         # Fit LassoVARX
@@ -227,27 +227,27 @@ class LassoVARX:
         model.fit(X, Y.loc[:, h])
         return h, model
 
-    
-    def _fit_parallel(self, Xs, Ys):
-        """ 
-        Fit the LassoVARX model to the provided endogenous and exogenous data.
-        This method estimates the model parameters for each hour of the day using Lasso regression with BIC for tuning the regularization parameter.
+    # TODO: fix parallel version
+    # def _fit_parallel(self, Xs, Ys):
+    #     """ 
+    #     Fit the LassoVARX model to the provided endogenous and exogenous data.
+    #     This method estimates the model parameters for each hour of the day using Lasso regression with BIC for tuning the regularization parameter.
 
-        Args:
-            Xs (dict): Second output of self._build_XY(). A dictionary where keys are endogenous variable names and values are dictionaries with hours as keys and dataframes as values.
-            Ys (dict): First output of self._build_XY(). A dictionary where keys are endogenous variable names and values are dataframes of target variables.
-        """
-        self.models = {}
+    #     Args:
+    #         Xs (dict): Second output of self._build_XY(). A dictionary where keys are endogenous variable names and values are dictionaries with hours as keys and dataframes as values.
+    #         Ys (dict): First output of self._build_XY(). A dictionary where keys are endogenous variable names and values are dataframes of target variables.
+    #     """
+    #     self.models = {}
 
-        for var in Ys.keys():
-            Xdict, Y = Xs[var], Ys[var]
+    #     for var in Ys.keys():
+    #         Xdict, Y = Xs[var], Ys[var]
 
-            results = Parallel(n_jobs=self.n_jobs)(
-                delayed(self._fit_single_hour)(Xdict[h], Y, h, self.criterion, self.max_iter, self.tol) for h in range(24)
-            )
+    #         results = Parallel(n_jobs=self.n_jobs)(
+    #             delayed(self._fit_single_hour)(Xdict[h], Y, h, self.criterion, self.max_iter, self.tol, self.random_state) for h in range(24)
+    #         )
 
-            # Collect results into a dict
-            self.models[var] = dict(results)
+    #         # Collect results into a dict
+    #         self.models[var] = dict(results)
 
 
     def fit(self, Xs, Ys):
