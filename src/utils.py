@@ -1,9 +1,12 @@
 import pandas as pd
+import numpy as np
+from scipy.interpolate import interp1d
 
 
 def get_dst_transition_days(start_year, end_year, timezone='Europe/Rome'):
     """
-    Identify daylight saving time (DST) transition days for years between two specified start and end years (inclusive), for a given timezone.
+    Identify daylight saving time (DST) transition days for years between two specified start and end years (inclusive),
+    for a given timezone.
 
     This function returns two lists:
     - Days where 1 hour is gained (25-hour days, typically in autumn).
@@ -142,3 +145,85 @@ def find_nan_ranges(df):
     )
 
     return nan_periods
+
+
+def find_zeros(x, y):
+    """
+    Find the zeros of a function given sampled x and y values.
+    Given arrays of x and y values representing a sampled function, this function
+    searches for a zero crossing (where the function changes sign) and estimates
+    the corresponding x value using linear interpolation.
+
+    Args:
+        x (numpy.ndarray): Array of x values.
+        y (numpy.ndarray): Array of y values corresponding to the function values at x.
+
+    Returns:
+        numpy.ndarray: The 1d array corresponding to the interpolated x values where the function
+            crosses zero. Can be empty if no zeros were found.
+    """
+    # Ensure the input arrays are numpy arrays
+    x = np.asarray(x)
+    y = np.asarray(y)
+
+    sign_changes = np.where(np.diff(np.sign(y)) != 0)[0]
+
+    zeros = []
+    for idx in sign_changes:
+        x0, x1 = x[idx], x[idx+1]
+        y0, y1 = y[idx], y[idx+1]
+        zero = x0 - y0 * (x1 - x0) / (y1 - y0)
+        zeros.append(zero)
+
+    return np.array(zeros)
+
+
+def is_strictly_monotonic(a: np.ndarray) -> bool:
+    """
+    Check if a sequence is strictly monotonic (either increasing or decreasing).
+
+    Args:
+        sequence (numpy.ndarray): The sequence to check.
+
+    Returns:
+        bool: True if the sequence is strictly monotonic, False otherwise.
+    """
+    diff = np.diff(a)
+    return np.all(diff > 0) or np.all(diff < 0)
+
+
+def get_inverse_function(x_values, y_values):
+    """
+    Return an inverse interpolation function mapping y -> x.
+
+    This function constructs and returns a 1-D interpolator that gives x for a given y
+    by inverting the mapping defined by x_values and y_values. The y_values sequence
+    must be strictly monotonic (strictly increasing or strictly decreasing).
+
+    Args:
+        x_values (array-like): Sequence of x values corresponding to y_values. Must be the
+            same length as y_values.
+        y_values (array-like): Sequence of y values corresponding to x_values. Must be
+            strictly monotonic (no equal adjacent values).
+
+    Returns:
+        Callable[[float | array_like], float | ndarray]: A scipy.interpolate.interp1d
+        instance configured to map y -> x. It is created with bounds_error=False and
+        fill_value="extrapolate", so values outside the provided y range will be
+        extrapolated.
+
+    Raises:
+        AssertionError: If y_values is not strictly monotonic.
+
+    Example:
+        >>> inv_fn = get_inverse_function([0, 1, 2], [0.0, 0.5, 1.0])
+        >>> inv_fn(0.25)
+        0.5
+
+    Notes:
+        - The returned interpolator expects numeric inputs and returns floats or numpy arrays.
+        - The caller is responsible for ensuring x_values and y_values are aligned and
+          convertible to numeric arrays suitable for scipy.interpolate.interp1d.
+    """
+    assert is_strictly_monotonic(y_values)
+    return interp1d(y_values, x_values, bounds_error=False, fill_value="extrapolate")
