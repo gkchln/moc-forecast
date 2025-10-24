@@ -277,10 +277,14 @@ class LassoVARX:
                                             than number of samples ({X.shape[0]}). Consider using 'cv' instead.")
                         param_model = LassoLarsIC(criterion=self.criterion, max_iter=self.max_iter)
                         param = param_model.fit(X, Y.loc[:, h]).alpha_
-                        # Fitting LassoVARX using standard LASSO estimation technique
-                        model = Lasso(alpha=param, max_iter=self.max_iter, tol=self.tol)
+                        if param == 0:
+                            # In this case there is not a good convergence with Lasso so it is better to explicitely specify OLS
+                            model = LinearRegression(tol=self.tol, n_jobs=self.n_jobs)
+                        else:
+                            # Fitting LassoVARX using standard LASSO estimation technique
+                            model = Lasso(alpha=param, max_iter=self.max_iter, tol=self.tol, random_state=self.random_state)
                     else:
-                        model = LassoCV(alphas=100, cv=12, max_iter=self.max_iter, n_jobs=self.n_jobs, tol=self.tol)
+                        model = LassoCV(max_iter=self.max_iter, n_jobs=self.n_jobs, tol=self.tol, random_state=self.random_state)
                     model.fit(X, Y.loc[:, h])
 
                 self.models[var][h] = model
