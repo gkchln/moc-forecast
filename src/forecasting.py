@@ -3,16 +3,19 @@ Code containing the core model (LassoVARX)
 """
 import numpy as np
 import pandas as pd
+import pickle
+import os
 import datetime
 import logging
 import warnings
-from typing import Dict
-from tqdm import tqdm
+from typing import Dict, Any
+from tqdm import tqdm, trange
 import calendar
-from sklearn.linear_model import LassoLarsIC, Lasso, LassoCV
+from sklearn.linear_model import LassoLarsIC, Lasso, LassoCV, LinearRegression
+import pmdarima as pm
 from sklearn.preprocessing import StandardScaler
 from sklearn.exceptions import ConvergenceWarning
-from src.curves import SupplyDemandTimeSeries, ScoresData
+from src.curves import SupplyDemandTimeSeries, SupplyDemandEmbedding, FPCAEmbedding, ZSTEmbedding
 from src.preprocessing import ExogPreprocessor
 from joblib import Parallel, delayed
 
@@ -698,49 +701,74 @@ class MultivariateAutoARIMAperHour:
 
 
 class SupplyDemandForecaster:
-    def __init__(self, model: LassoVARX, preprocessor: ExogPreprocessor, K_supply: int, K_demand: int):
+    def __init__(
+            self,
+            model: LassoVARX,
+            preprocessor: ExogPreprocessor,
+            K_supply: int,
+            K_demand: int, 
+            save_features: bool = False,
+            transformer: str = 'fpca'
+        ):
         self.model = model
         self.preprocessor = preprocessor
         self.K_supply = K_supply
         self.K_demand = K_demand
+        self.save_features = save_features
+        if transformer not in ['fpca', 'zst']:
+            raise ValueError(f"embedding must be either 'fpca' or 'zst'. Got: {transformer}")
+        self.transformer_name = transformer
 
     def _transform_endog(self, sd: SupplyDemandTimeSeries) -> pd.DataFrame:
-        smoothed_sd = sd.smooth(bandwidth=1)
-        scores = smoothed_sd.fpca_fit_transform(self.K_supply, self.K_demand)
-        self.fpca_sd = scores.fpca_sd
+        if self.transformer_name == 'zst':
+            features = sd.zst_fit_transform(self.K_supply, self.K_demand)
+            self.transformer = features.zst_sd
+        else:    
+            smoothed_sd = sd.smooth(bandwidth=1)
+            features = smoothed_sd.fpca_fit_transform(self.K_supply, self.K_demand)
+            self.transformer = features.fpca_sd
+        if self.save_features:
+            self.features_ = features
         scaler = StandardScaler()
-        Y_scaled = pd.DataFrame(scaler.fit_transform(scores.data), columns=scores.data.columns,
-                         index=scores.data.index)
+        Y_scaled = pd.DataFrame(scaler.fit_transform(features.data), columns=features.data.columns,
+                         index=features.data.index)
         self.scaler = scaler
         return Y_scaled
     
-    def _transform_exog(self, df: pd.DataFrame, dummy_vars: list[str]) -> pd.DataFrame:
+    def _transform_exog(self, exog: pd.DataFrame, dummy_vars: list[str]) -> pd.DataFrame:
         """
         Transforms exogenous variables using standard normalization, excluding dummy variables.
 
         Args:
-            df (pd.DataFrame): Exogenous variable data.
+            exog (pd.DataFrame): Exogenous variable data.
             dummy_vars (list[str]): List of dummy variable column names.
 
         Returns:
             pd.DataFrame: Transformed exogenous data.
         """
         transformer_exog = StandardScaler()
-        transformed_df = df.copy()
-        num_vars = [var for var in df.columns if var not in dummy_vars]
+        transformed_df = exog.copy()
+        num_vars = [var for var in exog.columns if var not in dummy_vars]
         transformed_df.loc[:, num_vars] = transformer_exog.fit_transform(transformed_df.loc[:, num_vars].to_numpy())
         return transformed_df
     
-    def _unscale_pred(self, Y: pd.DataFrame) -> ScoresData:
+    def _unscale_pred(self, Y: pd.DataFrame) -> SupplyDemandEmbedding:
         Y_pred = pd.DataFrame(self.scaler.inverse_transform(Y), columns=Y.columns,
                               index=Y.index)
-        scores_pred = ScoresData(Y_pred, self.fpca_sd)
-        return scores_pred
+        if self.transformer_name == 'zst':
+            features_pred = ZSTEmbedding(data=Y_pred, transformer=self.transformer,
+                                         zst_sd=self.transformer)
+        else:
+            features_pred = FPCAEmbedding(data=Y_pred, transformer=self.transformer,
+                                          fpca_sd=self.transformer)
+        return features_pred
 
 
     def _inverse_transform_pred(self, Y: pd.DataFrame) -> SupplyDemandTimeSeries:
-        scores_pred = self._unscale_pred(Y)
-        sd_pred = scores_pred.inverse_transform()
+        features_pred = self._unscale_pred(Y)
+        if self.save_features:
+            self.features_pred_ = features_pred
+        sd_pred = features_pred.inverse_transform()
         return sd_pred
 
 
@@ -750,7 +778,7 @@ class SupplyDemandForecaster:
             exog: pd.DataFrame,
             test_start: datetime.date,
             recalibration: str = None,
-            correct: bool = True
+            correct: bool = True,
         ) -> SupplyDemandTimeSeries:
         endog = self._transform_endog(sd)
         exog_transformed = self._transform_exog(exog, self.preprocessor.dummy_columns)
