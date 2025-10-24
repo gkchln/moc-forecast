@@ -682,6 +682,21 @@ class SupplyDemandTimeSeries:
         sdts_pred.demand.data_matrix = self.demand.data_matrix[lookup_idxs, ...]
 
         return sdts_pred
+    
+
+def load_sdts(path: str) -> SupplyDemandTimeSeries:
+    with open(path, "rb") as file:
+        sdts = pickle.load(file)
+    return sdts
+
+
+def load_supply_demand_data(path: str) -> SupplyDemandEmbedding:
+    import pickle
+    with open(path, "rb") as f:
+        obj = pickle.load(f)
+    if not isinstance(obj, SupplyDemandEmbedding):
+        raise TypeError("Loaded object is not a SupplyDemandData instance.")
+    return obj
 
 
 
