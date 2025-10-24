@@ -515,7 +515,6 @@ class SupplyDemandTimeSeries:
 
                 if verbose:
                     logging.warning(f"No supply/demand intersection found for timestamp {self.timestamps[i]}.")
-                clearing_prices.append(np.nan)
             else:
                 clearing_prices.append(intersections_price[0]) # If multiple intersections, take the first one
         
@@ -523,6 +522,7 @@ class SupplyDemandTimeSeries:
             return pd.Series(clearing_prices, index=self.timestamps)
         else:
             return np.array(clearing_prices, dtype=return_dtype)
+        
         
     def smooth(self, bandwidth: int):
         """Smooths the provided SDTS with Kernel Smoothing
@@ -560,10 +560,10 @@ class SupplyDemandTimeSeries:
 
         fpca_sd = SupplyDemandFPCA(fpca_supply, fpca_demand, supply_fpc_names, demand_fpc_names)
 
-        return ScoresData(scores_df, fpca_sd)
+        return FPCAEmbedding(data=scores_df, transformer=fpca_sd, fpca_sd=fpca_sd)
     
     
-    def fpca_fit_transform(self, K_supply: int, K_demand: int) -> ScoresData:
+    def fpca_fit_transform(self, K_supply: int, K_demand: int) -> FPCAEmbedding:
         """
         Fits and transforms the supply and demand curve pairs with FPCA.
 
@@ -581,6 +581,34 @@ class SupplyDemandTimeSeries:
         scores = self.fpca_transform(fpca_supply, fpca_demand)
 
         return scores
+    
+    
+    def zst_fit_transform(self, K_supply: int, K_demand: int) -> ZSTEmbedding:
+        zst_supply = ZielSteinertTransformer(
+            curve_type='supply',
+            n_classes=K_supply
+        )
+
+        zst_demand = ZielSteinertTransformer(
+            curve_type='demand',
+            n_classes=K_demand
+        )
+
+        supply_class_qty = zst_supply.fit_transform(self.supply)
+        demand_class_qty = zst_demand.fit_transform(self.demand)
+
+        # TODO: Handle the class names in the transformer class
+        supply_class_names = [f'Q{i+1}o' for i in range(K_supply)]
+        demand_class_names = [f'Q{i+1}b' for i in range(K_demand)]
+        supply_class_qty.columns = supply_class_names
+        demand_class_qty.columns = demand_class_names
+
+        classes_df = supply_class_qty.join(demand_class_qty)
+
+        zst_sd = SupplyDemandZST(zst_supply, zst_demand,
+                                 supply_class_names, demand_class_names)
+
+        return ZSTEmbedding(data=classes_df, transformer=zst_sd, zst_sd=zst_sd)
     
 
     def correct_monotonicity(self) -> "SupplyDemandTimeSeries":
