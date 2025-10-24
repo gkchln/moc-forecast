@@ -16,42 +16,84 @@ from src.curves import SupplyDemandTimeSeries, ScoresData
 from src.preprocessing import ExogPreprocessor
 from joblib import Parallel, delayed
 
-valid_ar_structures = [
+# For warning coming from pmdarima
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+
+# LassoVARX implemented structures
+VALID_AR_STRUCTURES = [
     'full',
     'concurrent'
 ]
 
-valid_var_structures = [
+VALID_VAR_STRUCTURES = [
     None,
     'full',
     'concurrent',
 ]
 
-valid_exog_structures = [
+VALID_EXOG_STRUCTURES = [
     'full',
     'concurrent'
 ]
 
 class LassoVARX:
     """
-    Lasso-estimated Vector AutoRegressive model with eXogenous covariates. Assumes an hourly time series but fits 24 distinct daily time series models for each hour.
+    Lasso-estimated Vector AutoRegressive model with eXogenous covariates (LassoVARX).
+
+    This model estimates a set of 24 hourly Lasso regressions — one for each hour of the day —
+    to model multivariate time series with exogenous inputs. It supports different structural
+    configurations for autoregressive, vector autoregressive, and exogenous components, and
+    can be trained using various regularization selection criteria (AIC, BIC, or cross-validation).
+
+    The model assumes that both endogenous and exogenous series are aligned on an hourly
+    datetime index. It uses a fixed-length rolling calibration window for training, enabling
+    daily or monthly recalibration schemes.
 
     Args:
-        ar_structure (str, optional): Structure of univariate autoregressive terms. Must be either 'concurrent' or 'full'. Defaults to 'concurrent'.
-        var_structure (str, optional): Structure of vector autoregressive terms. Must be either None, 'concurrent', 'lag1_full' or 'full'. Defaults to None
-            which means no vector autoregressive terms.
-        calibration_window (datetime.timedelta, optional): The time window used for model calibration. This defines the period of historical data that will be used to train the model.
-            Defaults to pd.Timedelta(days=358), which means the model will use exactly one year of historical data for calibration.
+        lags_endog (list[int], optional): 
+            Lags in days for endogenous regressors. Defaults to [1, 7].
+        lags_exog (list[int], optional): 
+            Lags in days for exogenous regressors. Defaults to [0].
+        ar_structure (str, optional): 
+            Structure of univariate autoregressive terms ('concurrent' or 'full').
+            Defaults to 'concurrent'.
+        var_structure (str or None, optional): 
+            Structure of vector autoregressive terms (None, 'concurrent', or 'full').
+            Defaults to 'concurrent'.
+        exog_structure (str, optional): 
+            Structure of exogenous regressors ('concurrent' or 'full'). Defaults to 'concurrent'.
+        daytype_dummies (list[str], optional): 
+            Names of dummy variables in exogenous data that are not lagged.
+            Defaults to ['is_Holiday', 'is_Monday', 'is_Saturday'].
+        calibration_window (datetime.timedelta, optional): 
+            Time span of historical data used for model calibration.
+            Defaults to `pd.Timedelta(days=358)`.
+        criterion (str, optional): 
+            Regularization selection method ('aic', 'bic', or 'cv'). Defaults to 'aic'.
+        max_iter (int, optional): 
+            Maximum number of iterations for optimization. Defaults to 2500.
+        tol (float, optional): 
+            Tolerance for optimization convergence. Defaults to 1e-4.
+        n_jobs (int, optional): 
+            Number of parallel jobs. Defaults to 1.
+        show_features (bool, optional): 
+            If True, logs the features used for model fitting. Defaults to False.
+        ignore_convergence_warnings (bool, optional): 
+            If True, suppresses sklearn convergence warnings. Defaults to True.
+        random_state (int or None, optional): 
+            Random seed for reproducibility. Defaults to None.
 
     Raises:
-        ValueError: If `ar_structure` is not 'full' or 'concurrent' or if `var_structure` is not None, 'concurrent', 'lag1_full', or 'full'.
+        ValueError: If any of `ar_structure`, `var_structure`, or `exog_structure` 
+            are not among the valid options.
     """
     def __init__(
             self,
-            lags_endogs=[1, 7],
+            lags_endog=[1, 7],
             lags_exog=[0],
-            ar_structure='full',
-            var_structure=None,
+            ar_structure='concurrent',
+            var_structure='concurrent',
             exog_structure='concurrent',
             daytype_dummies=['is_Holiday', 'is_Monday', 'is_Saturday'],
             calibration_window=datetime.timedelta(days=358),
@@ -60,16 +102,17 @@ class LassoVARX:
             tol=1e-4,
             n_jobs=1,
             show_features=False,
-            ignore_convergence_warnings=True
+            ignore_convergence_warnings=True,
+            random_state=None
         ):
-        if ar_structure not in valid_ar_structures:
-            raise ValueError(f"ar_structure must be one of {valid_ar_structures}")
-        if var_structure not in valid_var_structures:
-            raise ValueError(f"var_structure must be one of {valid_var_structures}")
-        if exog_structure not in valid_exog_structures:
-            raise ValueError(f"exog_structure must be one of {valid_exog_structures}")
+        if ar_structure not in VALID_AR_STRUCTURES:
+            raise ValueError(f"ar_structure must be one of {VALID_AR_STRUCTURES}")
+        if var_structure not in VALID_VAR_STRUCTURES:
+            raise ValueError(f"var_structure must be one of {VALID_VAR_STRUCTURES}")
+        if exog_structure not in VALID_EXOG_STRUCTURES:
+            raise ValueError(f"exog_structure must be one of {VALID_EXOG_STRUCTURES}")
         self.calibration_window = calibration_window
-        self.lags_endogs = lags_endogs
+        self.lags_endogs = lags_endog
         self.lags_exog = lags_exog
         self.daytype_dummies = daytype_dummies
         self.ar_structure = ar_structure
@@ -81,7 +124,9 @@ class LassoVARX:
         self.n_jobs = n_jobs
         self.ignore_convergence_warnings = ignore_convergence_warnings
         self.show_features = show_features
+        self.random_state = random_state
 
+    # TODO: Reorganize this method
     def _build_XY(self, endog, exog):
         """
         From endogenous and exogenous multivariate time series, build the target and features for the model by pivoting every component of the endogenous variable
@@ -270,8 +315,8 @@ class LassoVARX:
             pd.DataFrame: A single dataframe with an hourly datetime index containing all the predictions.
         """
         df_list = []
-        for var, df in Ys.items():
-            flat_df = df.reset_index().melt(id_vars="index", var_name="hour", value_name=var)
+        for var, endog in Ys.items():
+            flat_df = endog.reset_index().melt(id_vars="index", var_name="hour", value_name=var)
             flat_df["datetime"] = pd.to_datetime(flat_df["index"]) + pd.to_timedelta(flat_df["hour"], unit='h')
             flat_df.drop(['index', 'hour'], axis=1, inplace=True)
             flat_df.set_index("datetime", inplace=True)
