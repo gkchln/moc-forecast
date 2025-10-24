@@ -395,6 +395,7 @@ class SupplyDemandTimeSeries:
 
         raise TypeError("Index must be int, slice, timestamp-like, or list of those.")
     
+    
     def copy(self):
         """
         Return a deep copy of the SupplyDemandTimeSeries instance.
@@ -403,6 +404,7 @@ class SupplyDemandTimeSeries:
             self.supply.copy(),
             self.demand.copy()
         )
+    
     
     def to_pickle(self, path: str, verbose=False):
         if not path.endswith('.pkl'):
@@ -443,6 +445,7 @@ class SupplyDemandTimeSeries:
         sorted_indices = sorted(indices)
         return self[sorted_indices]
     
+    
     def plot(self, fig=None, figsize=None, color=None, legend=False, **kwargs):
         """
         Plot the supply and demand curves for each timestamp using the same color for each pair.
@@ -474,14 +477,15 @@ class SupplyDemandTimeSeries:
             fig = self.supply[i:i+1].plot(fig=fig, color=c, label=self.timestamps[i], **kwargs)
             fig = self.demand[i:i+1].plot(fig=fig, color=c, label=None, **kwargs)
 
-        ax.set_ylabel('Quantity [MWh]')
+        ax.set_ylabel('Quantity [GWh]')
         ax.set_xlabel('Price [€/MWh]')
         if legend:
             ax.legend()
 
         return fig
     
-    def get_clearing_prices(self, return_series=True, verbose=True, return_dtype=np.float16):
+    
+    def get_clearing_prices(self, return_series=True, verbose=False, return_dtype=np.float32, extrapolate_intersection=True):
         """
         Compute the market clearing prices for each timestamp by finding the intersection between supply and demand curves.
         The method iterates over all available timestamps, computes the difference between supply and demand volumes,
@@ -495,11 +499,20 @@ class SupplyDemandTimeSeries:
                 otherwise as a NumPy array.
         """
         clearing_prices = []
-        volumes_diff = (self.supply - self.demand).data_matrix.squeeze()
+        volumes_diff = (self.supply - self.demand).data_matrix[..., 0]
 
         for i in range(len(self)):
             intersections_price = find_zeros(self.price_grid, volumes_diff[i, :])
+
             if len(intersections_price) == 0:
+                if extrapolate_intersection:
+                    if volumes_diff[i, 0] > 0:
+                        clearing_prices.append(self.price_grid[0]) # Hotfix when supply(p) < demand(p) forall p
+                    else:
+                        clearing_prices.append(self.price_grid[-1]) # In this case supply(p) > demand(p) forall p necessarily
+                else:
+                    clearing_prices.append(np.nan)
+
                 if verbose:
                     logging.warning(f"No supply/demand intersection found for timestamp {self.timestamps[i]}.")
                 clearing_prices.append(np.nan)
