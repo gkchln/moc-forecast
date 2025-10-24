@@ -15,39 +15,190 @@ from skfda.preprocessing.smoothing import KernelSmoother
 from skfda.preprocessing.dim_reduction import FPCA
 from skfda.misc.hat_matrix import NadarayaWatsonHatMatrix
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Sequence
+from .utils import find_zeros, is_strictly_monotonic, get_inverse_function
 
 
 
-def find_zeros(x, y):
+class ZielSteinertTransformer:
+    """Transformer for discretizing and reconstructing electricity supply or demand curves
+    following the approach of Ziel & Steinert (2016).
+
+    This class transforms continuous cumulative quantity curves (FDataGrid)
+    into discrete class-based representations and reconstructs them back.
+
+    Attributes:
+        type (str): Indicates whether the transformer handles 'supply' or 'demand' curves.
+        n_classes (int): Number of discretized quantity classes.
+        price_grid (np.ndarray): Price grid extracted from the input curves after fitting.
+        mean_curve (FDataGrid): Mean cumulative curve computed during fitting.
+        Q_grid (np.ndarray): Equidistant quantity grid used to build class boundaries.
+        class_bounds (np.ndarray): Price boundaries corresponding to quantity classes.
     """
-    Find the zeros of a function given sampled x and y values.
-    Given arrays of x and y values representing a sampled function, this function
-    searches for a zero crossing (where the function changes sign) and estimates
-    the corresponding x value using linear interpolation.
+    def __init__(self, curve_type: str, n_classes: int):
+        """Initializes the transformer.
 
-    Args:
-        x (numpy.ndarray): Array of x values.
-        y (numpy.ndarray): Array of y values corresponding to the function values at x.
+        Args:
+            type (str): Either 'supply' or 'demand'.
+            n_classes (int): Number of discretized quantity classes.
 
-    Returns:
-        numpy.ndarray: The 1d array corresponding to the interpolated x values where the function crosses zero. Can be empty if no zeros were found.
-    """
-    # Ensure the input arrays are numpy arrays
-    x = np.asarray(x)
-    y = np.asarray(y)
+        Raises:
+            ValueError: If `type` is not 'supply' or 'demand'.
+        """
+        if curve_type not in ['supply', 'demand']:
+            raise ValueError(f"curve_type argument must be 'supply' or 'demand'. Got: {curve_type}")
+        self.curve_type = curve_type
+        self.n_classes = n_classes
 
-    sign_changes = np.where(np.diff(np.sign(y)) != 0)[0]
+    
+    def _get_qty_grid(self, mean_curve: FDataGrid) -> np.ndarray:
+        """Builds an equidistant quantity grid covering the entire mean curve domain.
 
-    zeros = []
-    for idx in sign_changes:
-        x0, x1 = x[idx], x[idx+1]
-        y0, y1 = y[idx], y[idx+1]
-        zero = x0 - y0 * (x1 - x0) / (y1 - y0)
-        zeros.append(zero)
+        Args:
+            mean_curve (FDataGrid): Mean cumulative price–quantity curve.
 
-    return np.array(zeros)
+        Returns:
+            np.ndarray: Array of equidistant quantity grid points.
+        """
+        Qmin = mean_curve.data_matrix[0, 0, 0]
+        Qmax = mean_curve.data_matrix[0, -1, 0]
+        if self.curve_type == 'demand':
+            Qmin, Qmax = Qmax, Qmin
+        Q_grid = np.linspace(Qmin, Qmax, self.n_classes)
+        return Q_grid
+    
+    def _get_class_bounds(self, mean_curve: FDataGrid, Q_grid: np.ndarray) -> np.ndarray:
+        """Computes price class boundaries by inverting the mean cumulative curve.
+
+        Args:
+            mean_curve (FDataGrid): Mean cumulative quantity curve.
+            Q_grid (np.ndarray): Grid of cumulative quantities defining class boundaries.
+
+        Returns:
+            np.ndarray: Array of price values corresponding to class boundaries.
+        """
+        x_values, y_values = mean_curve.grid_points[0], mean_curve.data_matrix[0, :, 0]
+        inverse_mean = get_inverse_function(x_values, y_values)
+        class_bounds = inverse_mean(Q_grid)
+        # HOTFIX for ensuring the extreme class bounds correspond to the extremes of price_grid
+        if self.curve_type == 'demand':
+            class_bounds[0] = x_values[-1]
+            class_bounds[-1] = x_values[0]
+        else:
+            class_bounds[0] = x_values[0]
+            class_bounds[-1] = x_values[-1]
+        return class_bounds
+    
+    @staticmethod
+    def _get_class_qty(curves: FDataGrid, class_bounds: np.ndarray) -> pd.DataFrame:
+        """Computes the quantity supplied/demanded within each class for a set of curves.
+
+        Args:
+            curves (FDataGrid): Set of cumulative quantity curves.
+            class_bounds (np.ndarray): Price boundaries defining the classes.
+
+        Returns:
+            pd.DataFrame: DataFrame of class quantities for each curve. Columns correspond
+            to classes, and rows correspond to samples.
+        """
+        cum_class_qty = curves(class_bounds)[..., 0]
+        class_qty = np.zeros((len(curves), len(class_bounds)))
+        class_qty[:, 0] = cum_class_qty[:, 0]
+        # First class quantity equals first cumulative value since diff can't compute it
+        class_qty[:, 1:] = np.diff(cum_class_qty, axis=1)
+        colnames = [f'Q{i+1}' for i in range(len(class_bounds))]
+        return pd.DataFrame(class_qty, index=curves.sample_names, columns=colnames)
+    
+    
+    def _get_class_membership(self, price_grid: np.ndarray,
+                              class_bounds: np.ndarray) -> np.ndarray:
+        """Assigns each price in the grid to its corresponding class index.
+
+        Args:
+            price_grid (np.ndarray): Price grid points of the cumulative curve.
+            class_bounds (np.ndarray): Array of class boundary prices.
+
+        Returns:
+            np.ndarray: Array of class indices corresponding to each price in `price_grid`.
+        """
+        right = self.curve_type != "demand"
+        return np.digitize(price_grid, class_bounds, right=right)
+    
+    
+    def _get_price_weights_per_class(self, mean_curve: FDataGrid, Q_grid: np.ndarray,
+                                    class_bounds: np.ndarray) -> np.ndarray:
+        """Computes weights of prices within their corresponding quantity classes.
+
+        Args:
+            mean_curve (FDataGrid): Mean cumulative curve.
+            Q_grid (np.ndarray): Quantity grid used to define classes.
+            class_bounds (np.ndarray): Price class boundaries.
+
+        Returns:
+            np.ndarray: Array of price weights normalized by class mean quantities.
+        """
+        price_grid = mean_curve.grid_points[0]
+        mean_cum_qty = mean_curve.data_matrix.squeeze()
+        mean_qty = mean_cum_qty.copy()
+        if self.curve_type == 'demand':
+            # Since the cumulative demand quantity is built from right to left,
+            # things happen in the reverse order
+            mean_qty[:-1] = -np.diff(mean_cum_qty)
+        else:
+            mean_qty[1:] = np.diff(mean_cum_qty)
+        class_mean_qty = Q_grid.copy()
+        class_mean_qty[1:] = np.diff(Q_grid)
+        # The following step creates a 1d array of length len(price_grid) where at index i we have the
+        # total mean quantity of the class price_grid[i] belongs to
+        class_mean_qty = class_mean_qty[self._get_class_membership(price_grid, class_bounds)]
+        return mean_qty / class_mean_qty
+    
+    
+    def fit_transform(self, curves: FDataGrid) -> pd.DataFrame:
+        """Transforms quantity curves into their class representation
+
+        Args:
+            curves (FDataGrid): quantity curves to transform
+
+        Returns:
+            pd.DataFrame: class quantity values for each curve. Rows correspond to different curves
+            while columns to the different classes
+        """
+        self.price_grid = curves.grid_points[0]
+        self.mean_curve = curves.mean()
+        self.Q_grid = self._get_qty_grid(self.mean_curve)
+        self.class_bounds = self._get_class_bounds(self.mean_curve, self.Q_grid)
+        return self._get_class_qty(curves, self.class_bounds)
+    
+    
+    def inverse_transform(self, class_qty: pd.DataFrame) -> FDataGrid:
+        """Reconstruct curves from their class representation
+
+        Args:
+            class_qty (pd.DataFrame): class quantities
+
+        Returns:
+            FDataGrid: reconstructed curves
+        """
+        weights = self._get_price_weights_per_class(self.mean_curve, self.Q_grid, self.class_bounds)
+        tot_class_qty = class_qty.to_numpy()[:, self._get_class_membership(self.price_grid,
+                                                                           self.class_bounds)]
+        recons_qty = weights[np.newaxis, :] * tot_class_qty
+        if self.curve_type == 'demand':
+            # Same as above
+            recons_cum_qty = recons_qty[:, ::-1].cumsum(axis=1)[:, ::-1]
+        else:
+            recons_cum_qty = recons_qty.cumsum(axis=1)
+
+        return FDataGrid(
+            data_matrix=recons_cum_qty,
+            grid_points=self.price_grid,
+            sample_names=class_qty.index
+        )
+    
+
 
 
 @dataclass
