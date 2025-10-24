@@ -1,5 +1,12 @@
 """
-Code containing the core model (LassoVARX)
+File containing forecasting-related classes:
+    1. Class for the VARX model with Lasso regularization for each hour (LassoVARX)
+    2. Classes for modeling and simulating from the distribution of the LassoVARX
+        forecast errors (AutoARIMAperHour and MultivariateAutoARIMAperHour)
+    3. Class for forecasting a SupplyDemandTimeSeries, wrapping LassoVARX and preprocessing operations
+        (SupplyDemandForecaster)
+    4. Class for obtaining probabilistic price forecasts from predicted curves and observed curves
+        (PriceProbabilisticForecaster)
 """
 import numpy as np
 import pandas as pd
@@ -795,4 +802,147 @@ class SupplyDemandForecaster:
             sd_pred = sd_pred.correct_monotonicity()
 
         return sd_pred
+    
+    def to_pickle(self, path: str, verbose=False):
+        if not path.endswith('.pkl'):
+            logging.warning("It's recommended to provide a path with a .pkl (pickle) extension.")
+        if not os.path.isdir(os.path.dirname(path)):
+            raise ValueError(f"The directory {os.path.dirname(path)} does not exist.")
+        else:
+            with open(path, 'wb') as f:
+                pickle.dump(self, f)
+            if verbose:
+                logging.info(f"Forecaster saved to {path}")
+
+
+
+
+class PriceProbabilisticForecaster:
+    def __init__(self,
+        curves_forecaster: SupplyDemandForecaster,
+        model: MultivariateAutoARIMAperHour,
+        prices_true: pd.Series,
+        calibration_window: datetime.timedelta,
+        test_start_date: datetime.date,
+        test_end_date: datetime.date | None = None,
+        nsim: int = 1000,
+        save_curves: bool = False
+    ):
+        self.forecaster = curves_forecaster
+        self.model = model
+        self.prices_true = prices_true
+        self.calibration_window = calibration_window
+        self.nsim = nsim
+        self.test_start_date = test_start_date
+        self.test_start = pd.Timestamp(test_start_date) # Time information automatically set at 00:00:00
+        if test_end_date is None:
+            self.test_end_date = curves_forecaster.scores_pred_.data.index[-1].date()
+        else:
+            self.test_end_date = test_end_date
+        self.test_end = pd.Timestamp(self.test_end_date) + datetime.timedelta(hours=23) # Time information set to 23:00:00
+        self.test_timestamps = pd.date_range(start=self.test_start, end=self.test_end, freq='h')
+        self.save_curves = save_curves
+
+
+    def _simulate_scores(self) -> np.ndarray:
+        # Initial calibration window
+        calibration_start_date = self.test_start_date - self.calibration_window
+        calibration_end_date = self.test_start_date - datetime.timedelta(days=1)
+        calibration_start = pd.Timestamp(calibration_start_date) # Time information automatically set at 00:00:00
+        calibration_end = pd.Timestamp(calibration_end_date) + datetime.timedelta(hours=23) # Time information set to 23:00:00
+
+        # Computing the scores prediction errors needed for fitting the model
+        Y = self.forecaster.scores_.data.loc[calibration_start:self.test_end, :]
+        Yhat = self.forecaster.scores_pred_.data.loc[calibration_start:self.test_end, :]
+        errors = Y - Yhat
+        errors_initial = errors.loc[calibration_start:calibration_end, :] # Initial calibration set
         
+        # Initial fit
+        self.model.fit(errors_initial)
+        
+        # Iterative fits with update of error model with rolling window
+        error_sims = []
+        for ts in tqdm(pd.date_range(start=self.test_start_date, end=self.test_end_date, freq='d')):
+            error_sims.append(self.model.simulate(nsim=self.nsim))
+            new_obs = errors.loc[str(ts.date())] # 24 rows df
+            self.model.update(new_obs, strategy='rolling')
+        
+        # We add the simulated errors to the multivariate point predictions
+        point_pred = Yhat.loc[self.test_start:self.test_end, :].to_numpy()[..., np.newaxis]
+        score_sims = point_pred + np.concatenate(error_sims, axis=0) # nd.array of shape (n_test, K, n_sim)
+
+        return score_sims
+    
+    
+    def _get_clearing_prices(self, scores_sim: np.ndarray, save_curves=False) -> pd.DataFrame:
+        if save_curves and scores_sim.shape[0] > 24:
+            logging.warning(f"Cannot save curve simulations for more than 24 timestamps: got {scores_sim.shape[0]}.")
+            save_curves = False
+
+        self.curves_sim_ = []
+        prices_sim = pd.DataFrame(index=self.test_timestamps, columns=range(self.nsim))
+
+        for i in trange(self.nsim):
+            scores = pd.DataFrame(scores_sim[..., i], columns=self.forecaster.scores_pred_.data.columns, index=self.test_timestamps)
+            scores = FPCAEmbedding(scores, self.forecaster.fpca_sd)
+            sd = scores.inverse_transform()
+            sd = sd.correct_monotonicity()
+            if save_curves:
+                self.curves_sim_.append(sd)
+            prices_sim.loc[:, i] = sd.get_clearing_prices(verbose=False)
+
+        return prices_sim
+    
+    
+    def _simulate_fpca_approx_error(self) -> pd.DataFrame:
+        sd_approx = self.forecaster.scores_.inverse_transform()
+        sd_approx = sd_approx.correct_monotonicity()
+        prices_approx = sd_approx.get_clearing_prices(return_series=True, verbose=False)
+        approx_errors = self.prices_true - prices_approx
+        
+        daily_timestamps = pd.date_range(self.test_start_date, self.test_end_date, freq="d")
+        n_days = len(daily_timestamps)
+        approx_errors_sims = np.empty((24 * n_days, self.nsim))
+
+        for i, ts in enumerate(tqdm(daily_timestamps)):
+            eps = approx_errors.loc[ts - self.calibration_window : ts - datetime.timedelta(hours=1)]
+            hourly_mean = eps.groupby(eps.index.hour).mean()
+            hourly_std = eps.groupby(eps.index.hour).std()
+            # Compute errors standardized per hour
+            st_eps = (eps - eps.index.hour.map(hourly_mean)) / eps.index.hour.map(hourly_std)
+            sim = np.random.choice(st_eps.values, size=(24, self.nsim), replace=True)
+            sim = hourly_mean.to_numpy()[:, np.newaxis] + hourly_std.to_numpy()[:, np.newaxis] * sim # Destandardizing
+            approx_errors_sims[i*24:(i+1)*24, :] = sim
+
+        return pd.DataFrame(approx_errors_sims, index=self.test_timestamps, columns=range(self.nsim))
+    
+
+    def simulate_prices(self):
+        ndays = (self.test_end_date - self.test_start_date).days + 1
+        logging.info(f"Simulating scores for {ndays} days from {self.test_start_date} to {self.test_end_date}...")
+        scores_sim = self._simulate_scores()
+        logging.info("Done.")
+        logging.info("Backtransforming to curves representation and finding "
+                     f"clearing price for each of {self.nsim} simulations...")
+        prices_sim = self._get_clearing_prices(scores_sim, self.save_curves)
+        logging.info("Simulating the price error due to FPCA curves approximation "
+                     f"for {ndays} days from {self.test_start_date} to {self.test_end_date}...")
+        prices_sim = prices_sim + self._simulate_fpca_approx_error()
+        logging.info("Done")
+        return prices_sim
+    
+
+    @staticmethod
+    def get_quantiles(prices_sim: pd.DataFrame, n_quantiles: int = 99) -> pd.DataFrame:
+        qmin = 1 / (n_quantiles + 1)
+        qmax = 1 - qmin
+        return prices_sim.quantile(np.linspace(qmin, qmax, n_quantiles), axis=1).T
+    
+
+
+
+
+
+
+
+
