@@ -32,13 +32,11 @@ class GMEPreprocessor:
     Class to handle GME curves preprocessing.
     Args:
         market (str, optional): The market type. Defaults to 'MGP'.
-        clip_price (tuple, optional): Minimum and maximum price to clip. Defaults to (0, 500).
         qty_unit (str, optional): Quantity unit for curves. Defaults to 'GW'.
     """
-    def __init__(self, market='MGP', clip_price=(0, 500), qty_unit='GW', pool=None, price_domain=(0, 300), n_prices=301,
+    def __init__(self, market='MGP', qty_unit='GW', pool=None, price_domain=(0, 300), n_prices=301,
                  float_precision='float32'):
         self.market = market
-        self.clip_price = clip_price
         self.qty_unit = qty_unit
         self.pool = pool
         self.price_domain = price_domain
@@ -100,20 +98,19 @@ class GMEPreprocessor:
             pd.DataFrame: A DataFrame with columns 'cumQuantita' and 'Prezzo' for the specified type, date, and hour.
         Raises:
             KeyError: If required columns are missing from the input DataFrame.
-            AttributeError: If 'self.clip_price' is used but not defined.
         """
         slicer = (bids.Data == date) & (bids.Ora == hour)
         df = bids.loc[slicer, :]
+
+        if date >= 20250101:
+            df = df.loc[df.TIPO_OFFERTA != 'B'] # Remove block orders
+
         df.loc[:, '_sorting'] = df.Prezzo
         df.loc[df.Tipo == 'BID', '_sorting'] = -df._sorting
         df.sort_values(by=['Tipo', '_sorting'], inplace=True)
+
         df['cumQuantita'] = df.groupby('Tipo')['Quantita'].cumsum()
         
-        if self.clip_price:
-            df['Prezzo'] = df['Prezzo'].clip(
-                lower=self.clip_price[0],
-                upper=self.clip_price[1]
-            )
         return df.loc[df.Tipo == type, ['cumQuantita', 'Prezzo']]
     
 
@@ -153,6 +150,15 @@ class GMEPreprocessor:
             ].iloc[0]
         df['cumQuantita'] = df['cumQuantita'] + balance
         return df
+    
+    def add_block_orders(self, steps, bids, date, hour, type):
+        df = steps.copy()            
+        today_bids = bids.loc[(bids.Data == date) & (bids.Ora == hour), :]
+        block_orders = today_bids.loc[today_bids.TIPO_OFFERTA == 'B', :]
+        block_qty = block_orders.loc[block_orders.Tipo == type, 'QUANTITA_ACCETTATA'].sum()
+        df['cumQuantita'] = df['cumQuantita'] + block_qty
+        return df
+
     
 
     def get_qty_function(self, steps, xnew, type):
@@ -233,6 +239,9 @@ class GMEPreprocessor:
             disable=not progress_bar
         ):
             steps = self.get_curve_steps(df, date, hour, type)
+
+            if date >= 20250101: # Adding of block orders from this date
+                steps = self.add_block_orders(steps, df, date, hour, type)
 
             if type == 'OFF':
                 steps = self.add_import_export(steps, balance_df, date, hour)
