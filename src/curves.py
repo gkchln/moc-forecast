@@ -208,13 +208,54 @@ class SupplyDemandFPCA:
     supply_fpc_names: Sequence[str]
     demand_fpc_names: Sequence[str]
 
+
+
 @dataclass
-class ScoresData:
+class SupplyDemandZST:
+    zst_supply: ZielSteinertTransformer
+    zst_demand: ZielSteinertTransformer
+    supply_class_names: Sequence[str]
+    demand_class_names: Sequence[str]
+
+
+
+# Abstract Base Class for curves transformers
+@dataclass
+class SupplyDemandEmbedding(ABC):
+    """
+    Abstract base class for any supply-demand vector representation
+    (e.g., FPCA scores, class quantities, etc.).
+    """
     data: pd.DataFrame
-    fpca_sd: SupplyDemandFPCA
+    transformer: object  # Could be SupplyDemandFPCA, SupplyDemandZST, etc.
 
     def __post_init__(self):
         self._validate_columns()
+
+    @abstractmethod
+    def _validate_columns(self):
+        """Validate that all required columns exist in self.data."""
+        pass
+
+    @abstractmethod
+    def inverse_transform(self) -> "SupplyDemandTimeSeries":
+        """Reconstruct a SupplyDemandTimeSeries from this representation."""
+        pass
+
+    def to_dataframe(self) -> pd.DataFrame:
+        """Return a copy of the internal DataFrame."""
+        return self.data.copy()
+
+
+
+@dataclass
+class FPCAEmbedding(SupplyDemandEmbedding):
+    fpca_sd: "SupplyDemandFPCA"
+
+    def __post_init__(self):
+        # Keep compatibility: expose transformer alias
+        self.transformer = self.fpca_sd
+        super().__post_init__()
 
     def _validate_columns(self):
         missing_supply = set(self.fpca_sd.supply_fpc_names) - set(self.data.columns)
@@ -236,10 +277,34 @@ class ScoresData:
         demand.sample_names = self.data.index
 
         return SupplyDemandTimeSeries(supply, demand)
+    
 
-    def to_dataframe(self) -> pd.DataFrame:
-        """Return a copy of the internal score DataFrame."""
-        return self.data.copy()
+
+@dataclass
+class ZSTEmbedding(SupplyDemandEmbedding):
+    zst_sd: "SupplyDemandZST"
+
+    def __post_init__(self):
+        # Keep compatibility: expose transformer alias
+        self.transformer = self.zst_sd
+        super().__post_init__()
+
+    def _validate_columns(self):
+        missing_supply = set(self.zst_sd.supply_class_names) - set(self.data.columns)
+        missing_demand = set(self.zst_sd.demand_class_names) - set(self.data.columns)
+        if missing_supply or missing_demand:
+            raise ValueError(f"Missing class columns: {missing_supply | missing_demand}")
+
+    def inverse_transform(self) -> "SupplyDemandTimeSeries":
+        supply_qty = self.data[self.zst_sd.supply_class_names]
+        demand_qty = self.data[self.zst_sd.demand_class_names]
+
+        supply = self.zst_sd.zst_supply.inverse_transform(supply_qty)
+        demand = self.zst_sd.zst_demand.inverse_transform(demand_qty)
+
+        return SupplyDemandTimeSeries(supply, demand)
+
+
 
 
 class SupplyDemandTimeSeries:
