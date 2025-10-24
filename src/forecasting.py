@@ -461,7 +461,240 @@ class LassoVARX:
             # print("Daily recalibration complete for {}".format(current_datetime.date()))
 
         return pd.concat(Y_preds)
+    
 
+class AutoARIMAperHour:
+    def __init__(self, auto_arima_kwargs: Dict[str, Any]):
+        self.models: list[pm.arima.ARIMA] = []
+        self.auto_arima_kwargs = auto_arima_kwargs
+
+    def fit(self,
+            endog: pd.Series,
+            exog: pd.DataFrame | None = None):
+        self.timestamps = endog.index
+        self.endog = endog
+        self.exog = exog
+        self.models = []
+        for h in range(24):
+            y = endog[endog.index.hour == h].to_numpy()
+            if exog is not None:
+                X = exog[exog.index.hour == h].to_numpy()
+            else:
+                X = None
+            model = pm.auto_arima(
+                y,
+                X=X,
+                **self.auto_arima_kwargs
+            )
+            self.models.append(model)
+
+
+    def get_fittedvalues(self) -> pd.Series:
+        fitted = []
+        for h in range(24):
+            idx = self.timestamps[self.timestamps.hour == h]
+            fitted.append(pd.Series(self.models[h].fittedvalues(), index=idx))
+        return pd.concat(fitted).sort_index()
+    
+    
+    def get_residuals(self) -> pd.Series:
+        resid = []
+        for h in range(24):
+            idx = self.timestamps[self.timestamps.hour == h]
+            resid.append(pd.Series(self.models[h].resid(), index=idx))
+        return pd.concat(resid).sort_index()
+    
+
+    def get_mse(self) -> list:
+        mse = []
+        for h in range(24):
+            mse.append(np.mean(self.models[h].resid()**2))
+        return mse
+    
+    def get_std_residuals(self) -> pd.Series:
+        resid = self.get_residuals()
+        mse = self.get_mse()
+        resid = resid / np.sqrt(np.array((self.models[0].nobs_ * mse)))
+        return resid
+    
+
+    def predict(self,
+                exog: pd.DataFrame | None = None):
+        res = []
+        for h in range(24):
+            if exog is not None:
+                X = exog[exog.index.hour == h].to_numpy()
+            else:
+                X = None
+            yhat = self.models[h].predict(n_periods=1, X=X)[0] # scalar value
+            res.append(yhat)
+        idx = pd.date_range(start=self.timestamps[-1] + pd.Timedelta(hours=1), periods=24, freq='h')
+        return pd.Series(res, index=idx)
+    
+    
+    def recalibrate(self,
+        endog: pd.Series,
+        exog: pd.DataFrame | None = None,
+        refit_auto: bool = False,
+        strategy: str = 'rolling',
+        maxiter: int = 50,
+        **kwargs
+    ):
+        new_timestamps = pd.date_range(start=self.timestamps[-1] + pd.Timedelta(hours=1), periods=24, freq='h')
+        if not new_timestamps.equals(endog.index):
+            raise ValueError("endog must have exactly 24 hourly observations starting from the hour" \
+            "after the last observation used in fit() or previous update()")
+        
+        if strategy == 'rolling':
+            self.timestamps = self.timestamps[24:].append(new_timestamps)
+            endog = pd.concat([self.endog[24:], endog])
+            exog = pd.concat([self.exog[24:], exog]) if self.exog is not None else None
+        elif strategy == 'expanding':
+            self.timestamps = self.timestamps.append(new_timestamps)
+            endog = pd.concat([self.endog, endog])
+            exog = pd.concat([self.exog, exog]) if self.exog is not None else None
+        else:
+            raise ValueError("strategy must be either 'rolling' or 'expanding'")
+        
+        if refit_auto:
+            self.fit(endog=endog, exog=exog, **self.auto_arima_kwargs)
+        else:
+            self.endog = endog
+            self.exog = exog
+            for h in range(24):
+                y = endog[endog.index.hour == h].to_numpy()
+                if exog is not None:
+                    X = exog[exog.index.hour == h].to_numpy()
+                else:
+                    X = None
+                start_params = self.models[h].arima_res_.params
+                self.models[h]._fit(y, X, start_params=start_params, maxiter=maxiter, **kwargs)
+    
+            
+
+class MultivariateAutoARIMAperHour:
+    def __init__(self, auto_arima_kwargs: dict[str, Any]):
+        self.models: dict[str, AutoARIMAperHour] = {}
+        self.auto_arima_kwargs = auto_arima_kwargs
+
+    def fit(
+        self,
+        endog_df: pd.DataFrame,
+        exog_dict: dict[str, pd.DataFrame] | None = None,
+        verbose: bool = False
+    ):
+        self.models = {}
+        self.endog_colnames = endog_df.columns
+        for col in endog_df.columns:
+            if verbose:
+                logging.info(f"Fitting AutoARIMAperHour for column: {col}")
+            endog = endog_df[col]
+            if exog_dict is not None and col in exog_dict.keys():
+                exog = exog_dict[col]
+            else:
+                exog = None
+
+            model = AutoARIMAperHour(auto_arima_kwargs=self.auto_arima_kwargs)
+            model.fit(
+                endog,
+                exog=exog,
+            )
+            self.models[col] = model
+
+
+    def get_fittedvalues(
+        self,
+    ) -> pd.DataFrame:
+        fitted = {}
+        for col, model in self.models.items():
+            fitted[col] = model.get_fittedvalues()
+        return pd.DataFrame(fitted)
+    
+    
+    def get_residuals(
+        self,
+    ) -> pd.DataFrame:
+        resid = {}
+        for col, model in self.models.items():
+            resid[col] = model.get_residuals()
+        return pd.DataFrame(resid)
+    
+    
+    def get_mse(
+        self
+    ) -> pd.DataFrame:
+        mse = {}
+        for col, model in self.models.items():
+            mse[col] = model.get_mse()
+        return pd.DataFrame(mse)
+    
+
+    def get_std_residuals(
+        self
+    ) -> pd.DataFrame:
+        resid = {}
+        for col, model in self.models.items():
+            resid[col] = model.get_std_residuals()
+        return pd.DataFrame(resid)
+    
+
+    def predict(
+        self,
+        exog_dict: dict[str, pd.DataFrame] | None = None,
+    ) -> pd.DataFrame:
+        preds = pd.DataFrame()
+        for col, model in self.models.items():
+            if exog_dict is not None and col in exog_dict.keys():
+                exog = exog_dict[col]
+            else:
+                exog = None
+            preds[col] = model.predict(exog=exog)
+        self.predict_index = preds.index # useful for subsequent methods where we loose that info
+        return preds
+    
+
+    def update(
+        self,
+        endog_df: pd.DataFrame,
+        exog_dict: dict[str, pd.DataFrame] | None = None,
+        refit_auto: bool = False,
+        strategy: str = 'rolling',
+        maxiter: int = 50,
+        **kwargs,
+    ):
+        for col, model in self.models.items():
+            if exog_dict is not None and col in exog_dict.keys():
+                exog = exog_dict[col]
+            else:
+                exog = None
+            model.recalibrate(endog_df[col], exog, refit_auto=refit_auto,
+                              strategy=strategy, maxiter=maxiter, **kwargs)
+    
+
+    def simulate(
+        self,
+        exog_dict: dict[str, pd.DataFrame] | None = None,
+        nsim: int = 1000,
+    ) -> np.ndarray:
+        n = 24 # n_hours
+        p = len(self.endog_colnames)
+        mean = self.predict(exog_dict=exog_dict)
+        eps_std = self.get_std_residuals()
+        eps_sim = eps_std.sample(n * nsim, replace=True, ignore_index=True).to_numpy().reshape(n, p, nsim)
+        std = np.sqrt(self.get_mse().to_numpy())
+        eps_sim = std[..., np.newaxis] * eps_sim # Destandardize residuals
+        pred_sim = mean.to_numpy()[..., np.newaxis] + eps_sim
+        return pred_sim
+    
+
+    def get_quantile(
+        self,
+        pred_sim: np.ndarray,
+        q: float,
+    ) -> pd.DataFrame:
+        return pd.DataFrame(np.quantile(pred_sim, q, axis=2), index=self.predict_index, columns=self.endog_colnames)
+
+        
 
 
 class SupplyDemandForecaster:
