@@ -714,7 +714,7 @@ class SupplyDemandForecaster:
             preprocessor: ExogPreprocessor,
             K_supply: int,
             K_demand: int, 
-            save_features: bool = False,
+            save_features: bool = True,
             transformer: str = 'fpca'
         ):
         self.model = model
@@ -824,6 +824,7 @@ class PriceProbabilisticForecaster:
         prices_true: pd.Series,
         calibration_window: datetime.timedelta,
         test_start_date: datetime.date,
+        correct_monotonicity: bool = True,
         test_end_date: datetime.date | None = None,
         nsim: int = 1000,
         save_curves: bool = False
@@ -842,6 +843,7 @@ class PriceProbabilisticForecaster:
         self.test_end = pd.Timestamp(self.test_end_date) + datetime.timedelta(hours=23) # Time information set to 23:00:00
         self.test_timestamps = pd.date_range(start=self.test_start, end=self.test_end, freq='h')
         self.save_curves = save_curves
+        self.correct_monotonicity = correct_monotonicity
 
 
     def _simulate_scores(self) -> np.ndarray:
@@ -886,7 +888,8 @@ class PriceProbabilisticForecaster:
             scores = pd.DataFrame(scores_sim[..., i], columns=self.forecaster.scores_pred_.data.columns, index=self.test_timestamps)
             scores = FPCAEmbedding(scores, self.forecaster.fpca_sd)
             sd = scores.inverse_transform()
-            sd = sd.correct_monotonicity()
+            if self.correct_monotonicity:
+                sd = sd.correct_monotonicity()
             if save_curves:
                 self.curves_sim_.append(sd)
             prices_sim.loc[:, i] = sd.get_clearing_prices(verbose=False)
@@ -896,7 +899,8 @@ class PriceProbabilisticForecaster:
     
     def _simulate_fpca_approx_error(self) -> pd.DataFrame:
         sd_approx = self.forecaster.scores_.inverse_transform()
-        sd_approx = sd_approx.correct_monotonicity()
+        if self.correct_monotonicity:
+            sd_approx = sd_approx.correct_monotonicity()
         prices_approx = sd_approx.get_clearing_prices(return_series=True, verbose=False)
         approx_errors = self.prices_true - prices_approx
         
