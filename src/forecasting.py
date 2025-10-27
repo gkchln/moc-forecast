@@ -435,7 +435,7 @@ class LassoVARX:
         return pd.concat(Y_preds)
     
 
-    def fit_forecast_daily_recal(self, endog, exog, test_start, verbose=False):
+    def fit_forecast_daily_recal(self, endog, exog, test_start, verbose=False, show_progress=True):
         """
         Performs rolling one-step ahead forecasts of all hours of the day simultaneously using a model that is retrained every day on the calibration window.
         
@@ -453,8 +453,13 @@ class LassoVARX:
         num_days = (end_datetime - pd.Timestamp(test_start)).days + 1
 
         Ys, Xs = self._build_XY(endog, exog)
+
+        if show_progress:
+            progress_iter = trange(num_days, desc="Daily Recalibration Progress")
+        else:
+            progress_iter = range(num_days)
         
-        for i in tqdm(range(num_days), desc="Daily Recalibration Progress"):
+        for i in progress_iter:
             forecast_date = test_start + pd.Timedelta(days=i)
             # Here we use the private method _fit_forecast_from_XY() to avoid rebuilding everytime Xs and Ys (which is expensive)
             if forecast_date <= end_date:
@@ -786,13 +791,14 @@ class SupplyDemandForecaster:
             test_start: datetime.date,
             recalibration: str = None,
             correct: bool = True,
+            show_progress: bool = True
         ) -> SupplyDemandTimeSeries:
         endog = self._transform_endog(sd)
         exog_transformed = self._transform_exog(exog, self.preprocessor.dummy_columns)
         if recalibration is None:
             endog_pred = self.model.fit_forecast(endog, exog_transformed, test_start)
         elif recalibration == 'daily':
-            endog_pred = self.model.fit_forecast_daily_recal(endog, exog_transformed, test_start)
+            endog_pred = self.model.fit_forecast_daily_recal(endog, exog_transformed, test_start, show_progress=show_progress)
         elif recalibration == 'monthly':
             endog_pred = self.model.fit_forecast_monthly_recal(endog, exog_transformed, test_start)
         else:
