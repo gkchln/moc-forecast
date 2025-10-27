@@ -10,11 +10,6 @@ from src.utils import get_timestamp_from_gme_system, fix_daylight_saving_time
 
 pd.options.mode.chained_assignment = None  # default='warn'
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
-
 GME_DATASET_NAME = 'DomandaOfferta'
 
 weekday_mapping = {
