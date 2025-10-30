@@ -843,7 +843,7 @@ class PriceProbabilisticForecaster:
         self.test_start_date = test_start_date
         self.test_start = pd.Timestamp(test_start_date) # Time information automatically set at 00:00:00
         if test_end_date is None:
-            self.test_end_date = curves_forecaster.scores_pred_.data.index[-1].date()
+            self.test_end_date = curves_forecaster.features_pred_.data.index[-1].date()
         else:
             self.test_end_date = test_end_date
         self.test_end = pd.Timestamp(self.test_end_date) + datetime.timedelta(hours=23) # Time information set to 23:00:00
@@ -852,16 +852,16 @@ class PriceProbabilisticForecaster:
         self.correct_monotonicity = correct_monotonicity
 
 
-    def _simulate_scores(self) -> np.ndarray:
+    def _simulate_features(self) -> np.ndarray:
         # Initial calibration window
         calibration_start_date = self.test_start_date - self.calibration_window
         calibration_end_date = self.test_start_date - datetime.timedelta(days=1)
         calibration_start = pd.Timestamp(calibration_start_date) # Time information automatically set at 00:00:00
         calibration_end = pd.Timestamp(calibration_end_date) + datetime.timedelta(hours=23) # Time information set to 23:00:00
 
-        # Computing the scores prediction errors needed for fitting the model
-        Y = self.forecaster.scores_.data.loc[calibration_start:self.test_end, :]
-        Yhat = self.forecaster.scores_pred_.data.loc[calibration_start:self.test_end, :]
+        # Computing the features prediction errors needed for fitting the model
+        Y = self.forecaster.features_.data.loc[calibration_start:self.test_end, :]
+        Yhat = self.forecaster.features_pred_.data.loc[calibration_start:self.test_end, :]
         errors = Y - Yhat
         errors_initial = errors.loc[calibration_start:calibration_end, :] # Initial calibration set
         
@@ -877,23 +877,23 @@ class PriceProbabilisticForecaster:
         
         # We add the simulated errors to the multivariate point predictions
         point_pred = Yhat.loc[self.test_start:self.test_end, :].to_numpy()[..., np.newaxis]
-        score_sims = point_pred + np.concatenate(error_sims, axis=0) # nd.array of shape (n_test, K, n_sim)
+        features_sims = point_pred + np.concatenate(error_sims, axis=0) # nd.array of shape (n_test, K, n_sim)
 
-        return score_sims
+        return features_sims
     
     
-    def _get_clearing_prices(self, scores_sim: np.ndarray, save_curves=False) -> pd.DataFrame:
-        if save_curves and scores_sim.shape[0] > 24:
-            logging.warning(f"Cannot save curve simulations for more than 24 timestamps: got {scores_sim.shape[0]}.")
+    def _get_clearing_prices(self, features_sim: np.ndarray, save_curves=False) -> pd.DataFrame:
+        if save_curves and features_sim.shape[0] > 24:
+            logging.warning(f"Cannot save curve simulations for more than 24 timestamps: got {features_sim.shape[0]}.")
             save_curves = False
 
         self.curves_sim_ = []
         prices_sim = pd.DataFrame(index=self.test_timestamps, columns=range(self.nsim))
 
         for i in trange(self.nsim):
-            scores = pd.DataFrame(scores_sim[..., i], columns=self.forecaster.scores_pred_.data.columns, index=self.test_timestamps)
-            scores = FPCAEmbedding(scores, self.forecaster.fpca_sd)
-            sd = scores.inverse_transform()
+            features = pd.DataFrame(features_sim[..., i], columns=self.forecaster.features_pred_.data.columns, index=self.test_timestamps)
+            features = SupplyDemandEmbedding(features, self.forecaster.transformer)
+            sd = features.inverse_transform()
             if self.correct_monotonicity:
                 sd = sd.correct_monotonicity()
             if save_curves:
@@ -904,7 +904,7 @@ class PriceProbabilisticForecaster:
     
     
     def _simulate_fpca_approx_error(self) -> pd.DataFrame:
-        sd_approx = self.forecaster.scores_.inverse_transform()
+        sd_approx = self.forecaster.features_.inverse_transform()
         if self.correct_monotonicity:
             sd_approx = sd_approx.correct_monotonicity()
         prices_approx = sd_approx.get_clearing_prices(return_series=True, verbose=False)
@@ -929,12 +929,12 @@ class PriceProbabilisticForecaster:
 
     def simulate_prices(self):
         ndays = (self.test_end_date - self.test_start_date).days + 1
-        logging.info(f"Simulating scores for {ndays} days from {self.test_start_date} to {self.test_end_date}...")
-        scores_sim = self._simulate_scores()
+        logging.info(f"Simulating features for {ndays} days from {self.test_start_date} to {self.test_end_date}...")
+        features_sim = self._simulate_features()
         logging.info("Done.")
         logging.info("Backtransforming to curves representation and finding "
                      f"clearing price for each of {self.nsim} simulations...")
-        prices_sim = self._get_clearing_prices(scores_sim, self.save_curves)
+        prices_sim = self._get_clearing_prices(features_sim, self.save_curves)
         logging.info("Simulating the price error due to FPCA curves approximation "
                      f"for {ndays} days from {self.test_start_date} to {self.test_end_date}...")
         prices_sim = prices_sim + self._simulate_fpca_approx_error()
