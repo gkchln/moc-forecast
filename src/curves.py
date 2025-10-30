@@ -201,13 +201,13 @@ class ZielSteinertTransformer:
         """Reconstruct curves from their class representation
 
         Args:
-            class_qty (pd.DataFrame): class quantities
+            class_qty (np.ndarray): class quantities
 
         Returns:
             FDataGrid: reconstructed curves
         """
         weights = self._get_price_weights_per_class(self.mean_curve, self.Q_grid, self.class_bounds)
-        tot_class_qty = class_qty.to_numpy()[:, self._get_class_membership(self.price_grid,
+        tot_class_qty = class_qty[:, self._get_class_membership(self.price_grid,
                                                                            self.class_bounds)]
         recons_qty = weights[np.newaxis, :] * tot_class_qty
         if self.curve_type == 'demand':
