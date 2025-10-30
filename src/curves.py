@@ -17,7 +17,7 @@ from skfda.misc.hat_matrix import NadarayaWatsonHatMatrix
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Sequence, Any, Optional, Union, runtime_checkable, Protocol
 from .utils import find_zeros, is_strictly_monotonic, get_inverse_function
 
 
@@ -218,116 +218,108 @@ class ZielSteinertTransformer:
 
         return FDataGrid(
             data_matrix=recons_cum_qty,
-            grid_points=self.price_grid,
-            sample_names=class_qty.index
+            grid_points=self.price_grid
         )
     
 
 
+class CurveTransformer(Protocol):
+    def fit(self, curves: FDataGrid) -> Any:
+        ...
 
-@dataclass
-class SupplyDemandFPCA:
-    fpca_supply: FPCA
-    fpca_demand: FPCA
-    supply_fpc_names: Sequence[str]
-    demand_fpc_names: Sequence[str]
+    def transform(self, curves: FDataGrid) -> pd.DataFrame:
+        ...
 
+    def fit_transform(self, curves: FDataGrid) -> pd.DataFrame:
+        ...
 
-
-@dataclass
-class SupplyDemandZST:
-    zst_supply: ZielSteinertTransformer
-    zst_demand: ZielSteinertTransformer
-    supply_class_names: Sequence[str]
-    demand_class_names: Sequence[str]
-
-
+    def inverse_transform(self, features: pd.DataFrame) -> FDataGrid:
+        ...
+    
 
 # Abstract Base Class for curves transformers
 @dataclass
-class SupplyDemandEmbedding(ABC):
+class SupplyDemandTransformer(ABC):
     """
-    Abstract base class for any supply-demand vector representation
-    (e.g., FPCA scores, class quantities, etc.).
+    Abstract base class for supply-demand transformers
     """
-    data: pd.DataFrame
-    transformer: object  # Could be SupplyDemandFPCA, SupplyDemandZST, etc.
+    K_supply: int
+    K_demand: int
+    supply_features_names: Sequence[str] = None
+    demand_features_names: Sequence[str] = None
+    transformer_supply_: Optional[CurveTransformer] = None
+    transformer_demand_: Optional[CurveTransformer] = None
 
+    @abstractmethod
     def __post_init__(self):
-        self._validate_columns()
-
-    @abstractmethod
-    def _validate_columns(self):
-        """Validate that all required columns exist in self.data."""
+        """Post initialization should add supply_features_names and demand_features_names attributes"""
         pass
 
     @abstractmethod
-    def inverse_transform(self) -> "SupplyDemandTimeSeries":
-        """Reconstruct a SupplyDemandTimeSeries from this representation."""
+    def fit(self, sd: "SupplyDemandTimeSeries") -> "SupplyDemandTransformer":
+        """Fit should add transformer_supply_ and transformer_demand_ attributes"""
         pass
 
-    def to_dataframe(self) -> pd.DataFrame:
-        """Return a copy of the internal DataFrame."""
-        return self.data.copy()
+    def _check_is_fitted(self):
+        if self.transformer_supply_ is None or self.transformer_demand_ is None:
+            raise RuntimeError("Call fit() before transform().")
+
+    def transform(self, sd: "SupplyDemandTimeSeries") -> pd.DataFrame:
+        self._check_is_fitted()
+        features_supply = self.transformer_supply_.transform(sd.supply)
+        features_demand = self.transformer_demand_.transform(sd.demand)
+        return pd.DataFrame(
+            np.hstack([features_supply, features_demand]),
+            index=sd.timestamps,
+            columns=self.supply_features_names + self.demand_features_names
+        )
+    
+    def fit_transform(self, sd: "SupplyDemandTimeSeries") -> pd.DataFrame:
+        """Fit the transformer model on supply and demand and return the features."""
+        return self.fit(sd).transform(sd)
+
+
+    def inverse_transform(self, features: pd.DataFrame) -> "SupplyDemandTimeSeries":
+        self._check_is_fitted()
+        supply_features = features[self.supply_features_names].to_numpy()
+        demand_features = features[self.demand_features_names].to_numpy()
+        supply = self.transformer_supply_.inverse_transform(supply_features)
+        demand = self.transformer_demand_.inverse_transform(demand_features)
+        assert isinstance(supply, FDataGrid) and isinstance(demand, FDataGrid)
+        supply.sample_names = features.index
+        demand.sample_names = features.index
+        return SupplyDemandTimeSeries(supply, demand)
 
 
 
 @dataclass
-class FPCAEmbedding(SupplyDemandEmbedding):
-    fpca_sd: "SupplyDemandFPCA"
+class SupplyDemandFPCA(SupplyDemandTransformer):
+    K_supply: int
+    K_demand: int
 
     def __post_init__(self):
-        # Keep compatibility: expose transformer alias
-        self.transformer = self.fpca_sd
-        super().__post_init__()
+        self.supply_features_names = [f'FPC{i}o' for i in range(1, self.K_supply + 1)]
+        self.demand_features_names = [f'FPC{i}b' for i in range(1, self.K_demand + 1)]
 
-    def _validate_columns(self):
-        missing_supply = set(self.fpca_sd.supply_fpc_names) - set(self.data.columns)
-        missing_demand = set(self.fpca_sd.demand_fpc_names) - set(self.data.columns)
-        if missing_supply or missing_demand:
-            raise ValueError(f"Missing FPC columns: {missing_supply | missing_demand}")
-
-    def inverse_transform(self) -> "SupplyDemandTimeSeries":
-        # Extract score matrices
-        supply_scores = self.data[self.fpca_sd.supply_fpc_names].to_numpy()
-        demand_scores = self.data[self.fpca_sd.demand_fpc_names].to_numpy()
-
-        # Inverse transform
-        supply = self.fpca_sd.fpca_supply.inverse_transform(supply_scores)
-        demand = self.fpca_sd.fpca_demand.inverse_transform(demand_scores)
-
-        # Assign sample names
-        supply.sample_names = self.data.index
-        demand.sample_names = self.data.index
-
-        return SupplyDemandTimeSeries(supply, demand)
+    def fit(self, sd: "SupplyDemandTimeSeries"):
+        self.transformer_supply_ = FPCA(n_components=self.K_supply).fit(sd.supply)
+        self.transformer_demand_ = FPCA(n_components=self.K_demand).fit(sd.demand)
+        return self
     
 
-
 @dataclass
-class ZSTEmbedding(SupplyDemandEmbedding):
-    zst_sd: "SupplyDemandZST"
+class SupplyDemandZST(SupplyDemandTransformer):
+    K_supply: int
+    K_demand: int
 
     def __post_init__(self):
-        # Keep compatibility: expose transformer alias
-        self.transformer = self.zst_sd
-        super().__post_init__()
+        self.supply_features_names = [f'Q{i}o' for i in range(1, self.K_supply + 1)]
+        self.demand_features_names = [f'Q{i}b' for i in range(1, self.K_demand + 1)]
 
-    def _validate_columns(self):
-        missing_supply = set(self.zst_sd.supply_class_names) - set(self.data.columns)
-        missing_demand = set(self.zst_sd.demand_class_names) - set(self.data.columns)
-        if missing_supply or missing_demand:
-            raise ValueError(f"Missing class columns: {missing_supply | missing_demand}")
-
-    def inverse_transform(self) -> "SupplyDemandTimeSeries":
-        supply_qty = self.data[self.zst_sd.supply_class_names]
-        demand_qty = self.data[self.zst_sd.demand_class_names]
-
-        supply = self.zst_sd.zst_supply.inverse_transform(supply_qty)
-        demand = self.zst_sd.zst_demand.inverse_transform(demand_qty)
-
-        return SupplyDemandTimeSeries(supply, demand)
-
+    def fit(self, sd: "SupplyDemandTimeSeries"):
+        self.transformer_supply_ = ZielSteinertTransformer(curve_type='supply', n_classes=self.K_supply).fit(sd.supply)
+        self.transformer_demand_ = ZielSteinertTransformer(curve_type='demand', n_classes=self.K_demand).fit(sd.demand)
+        return self
 
 
 
@@ -571,69 +563,6 @@ class SupplyDemandTimeSeries:
 
         return SupplyDemandTimeSeries(smoothed_supply, smoothed_demand)
     
-    
-    def fpca_transform(self, fpca_supply: FPCA, fpca_demand: FPCA):
-        scores_supply = fpca_supply.transform(self.supply)
-        scores_demand = fpca_demand.transform(self.demand)
-
-        supply_fpc_names = [f'FPC{i}o' for i in range(1, fpca_supply.n_components + 1)]
-        demand_fpc_names = [f'FPC{i}b' for i in range(1, fpca_demand.n_components + 1)]
-
-        scores_df = pd.DataFrame(scores_supply, self.timestamps, columns=supply_fpc_names)
-        scores_df.loc[:, demand_fpc_names] = scores_demand
-
-        fpca_sd = SupplyDemandFPCA(fpca_supply, fpca_demand, supply_fpc_names, demand_fpc_names)
-
-        return FPCAEmbedding(data=scores_df, transformer=fpca_sd, fpca_sd=fpca_sd)
-    
-    
-    def fpca_fit_transform(self, K_supply: int, K_demand: int) -> FPCAEmbedding:
-        """
-        Fits and transforms the supply and demand curve pairs with FPCA.
-
-        Args:
-            K_supply (int): Number of functional principal components to keep for supply.
-            K_demand (int): Number of functional principal components to keep for demand.
-
-        Returns:
-            ScoresData: The ScoresData object containing the scores for supply and demand
-                (dataframe with len(self) rows and K_supply + K_demand columns)
-        """
-        fpca_supply = FPCA(n_components=K_supply).fit(self.supply)
-        fpca_demand = FPCA(n_components=K_demand).fit(self.demand)
-
-        scores = self.fpca_transform(fpca_supply, fpca_demand)
-
-        return scores
-    
-    
-    def zst_fit_transform(self, K_supply: int, K_demand: int) -> ZSTEmbedding:
-        zst_supply = ZielSteinertTransformer(
-            curve_type='supply',
-            n_classes=K_supply
-        )
-
-        zst_demand = ZielSteinertTransformer(
-            curve_type='demand',
-            n_classes=K_demand
-        )
-
-        supply_class_qty = zst_supply.fit_transform(self.supply)
-        demand_class_qty = zst_demand.fit_transform(self.demand)
-
-        # TODO: Handle the class names in the transformer class
-        supply_class_names = [f'Q{i+1}o' for i in range(K_supply)]
-        demand_class_names = [f'Q{i+1}b' for i in range(K_demand)]
-        supply_class_qty.columns = supply_class_names
-        demand_class_qty.columns = demand_class_names
-
-        classes_df = supply_class_qty.join(demand_class_qty)
-
-        zst_sd = SupplyDemandZST(zst_supply, zst_demand,
-                                 supply_class_names, demand_class_names)
-
-        return ZSTEmbedding(data=classes_df, transformer=zst_sd, zst_sd=zst_sd)
-    
 
     def correct_monotonicity(self) -> "SupplyDemandTimeSeries":
         """
@@ -712,16 +641,6 @@ def load_sdts(path: str) -> SupplyDemandTimeSeries:
     with open(path, "rb") as file:
         sdts = pickle.load(file)
     return sdts
-
-
-def load_supply_demand_data(path: str) -> SupplyDemandEmbedding:
-    import pickle
-    with open(path, "rb") as f:
-        obj = pickle.load(f)
-    if not isinstance(obj, SupplyDemandEmbedding):
-        raise TypeError("Loaded object is not a SupplyDemandData instance.")
-    return obj
-
 
 
 if __name__ == "__main__":
