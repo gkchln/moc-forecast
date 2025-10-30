@@ -92,7 +92,7 @@ class ZielSteinertTransformer:
         return class_bounds
     
     @staticmethod
-    def _get_class_qty(curves: FDataGrid, class_bounds: np.ndarray) -> pd.DataFrame:
+    def _get_class_qty(curves: FDataGrid, class_bounds: np.ndarray) -> np.ndarray:
         """Computes the quantity supplied/demanded within each class for a set of curves.
 
         Args:
@@ -108,8 +108,7 @@ class ZielSteinertTransformer:
         class_qty[:, 0] = cum_class_qty[:, 0]
         # First class quantity equals first cumulative value since diff can't compute it
         class_qty[:, 1:] = np.diff(cum_class_qty, axis=1)
-        colnames = [f'Q{i+1}' for i in range(len(class_bounds))]
-        return pd.DataFrame(class_qty, index=curves.sample_names, columns=colnames)
+        return class_qty
     
     
     def _get_class_membership(self, price_grid: np.ndarray,
