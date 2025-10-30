@@ -154,9 +154,38 @@ class ZielSteinertTransformer:
         class_mean_qty = class_mean_qty[self._get_class_membership(price_grid, class_bounds)]
         return mean_qty / class_mean_qty
     
+
+    def fit(self, curves: FDataGrid) -> "ZielSteinertTransformer":
+        """Fits the transformer to the provided curves.
+
+        Args:
+            curves (FDataGrid): quantity curves to fit
+
+        Returns:
+            ZielSteinertTransformer: fitted transformer
+        """
+        self.price_grid = curves.grid_points[0]
+        self.mean_curve = curves.mean()
+        self.Q_grid = self._get_qty_grid(self.mean_curve)
+        self.class_bounds = self._get_class_bounds(self.mean_curve, self.Q_grid)
+        return self
+    
+    
+    def transform(self, curves: FDataGrid) -> np.ndarray:
+        """Transforms quantity curves into their class representation
+
+        Args:
+            curves (FDataGrid): quantity curves to transform
+
+        Returns:
+            np.ndarray: class quantity values for each curve. Rows correspond to different curves
+            while columns to the different classes
+        """
+        return self._get_class_qty(curves, self.class_bounds)
+    
     
     def fit_transform(self, curves: FDataGrid) -> pd.DataFrame:
-        """Transforms quantity curves into their class representation
+        """Fit and transforms quantity curves into their class representation
 
         Args:
             curves (FDataGrid): quantity curves to transform
@@ -165,14 +194,10 @@ class ZielSteinertTransformer:
             pd.DataFrame: class quantity values for each curve. Rows correspond to different curves
             while columns to the different classes
         """
-        self.price_grid = curves.grid_points[0]
-        self.mean_curve = curves.mean()
-        self.Q_grid = self._get_qty_grid(self.mean_curve)
-        self.class_bounds = self._get_class_bounds(self.mean_curve, self.Q_grid)
-        return self._get_class_qty(curves, self.class_bounds)
+        return self.fit(curves).transform(curves)
     
     
-    def inverse_transform(self, class_qty: pd.DataFrame) -> FDataGrid:
+    def inverse_transform(self, class_qty: np.ndarray) -> FDataGrid:
         """Reconstruct curves from their class representation
 
         Args:
