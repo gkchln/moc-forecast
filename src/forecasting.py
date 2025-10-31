@@ -22,7 +22,7 @@ from sklearn.linear_model import LassoLarsIC, Lasso, LassoCV, LinearRegression
 import pmdarima as pm
 from sklearn.preprocessing import StandardScaler
 from sklearn.exceptions import ConvergenceWarning
-from src.curves import SupplyDemandTimeSeries, SupplyDemandEmbedding, FPCAEmbedding, ZSTEmbedding
+from src.curves import SupplyDemandTimeSeries, SupplyDemandFPCA, SupplyDemandZST
 from src.preprocessing import ExogPreprocessor
 from joblib import Parallel, delayed
 
@@ -719,33 +719,30 @@ class SupplyDemandForecaster:
             preprocessor: ExogPreprocessor,
             K_supply: int,
             K_demand: int, 
-            save_features: bool = True,
             transformer: str = 'fpca'
         ):
         self.model = model
         self.preprocessor = preprocessor
         self.K_supply = K_supply
         self.K_demand = K_demand
-        self.save_features = save_features
+        self.transformer_name = transformer
         if transformer not in ['fpca', 'zst']:
             raise ValueError(f"embedding must be either 'fpca' or 'zst'. Got: {transformer}")
-        self.transformer_name = transformer
+        elif transformer == 'zst':
+            self.transformer = SupplyDemandZST(K_supply, K_demand)
+        else:
+            self.transformer = SupplyDemandFPCA(K_supply, K_demand)
 
-    def _transform_endog(self, sd: SupplyDemandTimeSeries) -> pd.DataFrame:
-        if self.transformer_name == 'zst':
-            features = sd.zst_fit_transform(self.K_supply, self.K_demand)
-            self.transformer = features.zst_sd
-        else:    
-            smoothed_sd = sd.smooth(bandwidth=1)
-            features = smoothed_sd.fpca_fit_transform(self.K_supply, self.K_demand)
-            self.transformer = features.fpca_sd
-        if self.save_features:
-            self.features_ = features
-        scaler = StandardScaler()
-        Y_scaled = pd.DataFrame(scaler.fit_transform(features.data), columns=features.data.columns,
-                         index=features.data.index)
-        self.scaler = scaler
-        return Y_scaled
+    def _transform_curves(self, sd: SupplyDemandTimeSeries) -> pd.DataFrame:
+        if self.transformer_name == 'fpca':
+            sd_to_transform = sd.smooth(bandwidth=1)
+        else:
+            sd_to_transform = sd.copy()
+        endog = self.transformer.fit_transform(sd_to_transform)
+        self.scaler_endog_ = StandardScaler()
+        endog_scaled = pd.DataFrame(self.scaler_endog_.fit_transform(endog), columns=endog.columns,
+                         index=endog.index)
+        return endog_scaled
     
     def _transform_exog(self, exog: pd.DataFrame, dummy_vars: list[str]) -> pd.DataFrame:
         """
@@ -758,31 +755,19 @@ class SupplyDemandForecaster:
         Returns:
             pd.DataFrame: Transformed exogenous data.
         """
-        transformer_exog = StandardScaler()
-        transformed_df = exog.copy()
+        self.scaler_exog_ = StandardScaler()
+        exog_scaled = exog.copy()
         num_vars = [var for var in exog.columns if var not in dummy_vars]
-        transformed_df.loc[:, num_vars] = transformer_exog.fit_transform(transformed_df.loc[:, num_vars].to_numpy())
-        return transformed_df
+        exog_scaled.loc[:, num_vars] = self.scaler_exog_.fit_transform(exog_scaled.loc[:, num_vars].to_numpy())
+        return exog_scaled
     
-    def _unscale_pred(self, Y: pd.DataFrame) -> SupplyDemandEmbedding:
-        Y_pred = pd.DataFrame(self.scaler.inverse_transform(Y), columns=Y.columns,
-                              index=Y.index)
-        if self.transformer_name == 'zst':
-            features_pred = ZSTEmbedding(data=Y_pred, transformer=self.transformer,
-                                         zst_sd=self.transformer)
-        else:
-            features_pred = FPCAEmbedding(data=Y_pred, transformer=self.transformer,
-                                          fpca_sd=self.transformer)
-        return features_pred
+    def _unscale_endog(self, endog_scaled: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame(self.scaler_endog_.inverse_transform(endog_scaled),
+                            columns=endog_scaled.columns, index=endog_scaled.index)
 
-
-    def _inverse_transform_pred(self, Y: pd.DataFrame) -> SupplyDemandTimeSeries:
-        features_pred = self._unscale_pred(Y)
-        if self.save_features:
-            self.features_pred_ = features_pred
-        sd_pred = features_pred.inverse_transform()
-        return sd_pred
-
+    def _inverse_transform_pred(self, endog: pd.DataFrame) -> SupplyDemandTimeSeries:
+        self.endog_pred_ = self._unscale_endog(endog)
+        return self.transformer.inverse_transform(self.endog_pred_)
 
     def fit_forecast(
             self,
@@ -793,7 +778,7 @@ class SupplyDemandForecaster:
             correct: bool = True,
             show_progress: bool = True
         ) -> SupplyDemandTimeSeries:
-        endog = self._transform_endog(sd)
+        endog = self._transform_curves(sd)
         exog_transformed = self._transform_exog(exog, self.preprocessor.dummy_columns)
         if recalibration is None:
             endog_pred = self.model.fit_forecast(endog, exog_transformed, test_start)
@@ -827,43 +812,43 @@ class PriceProbabilisticForecaster:
     def __init__(self,
         curves_forecaster: SupplyDemandForecaster,
         model: MultivariateAutoARIMAperHour,
-        prices_true: pd.Series,
         calibration_window: datetime.timedelta,
         test_start_date: datetime.date,
-        correct_monotonicity: bool = True,
+        correct_monotonicity: bool = False,
         test_end_date: datetime.date | None = None,
         nsim: int = 1000,
         save_curves: bool = False
     ):
         self.forecaster = curves_forecaster
         self.model = model
-        self.prices_true = prices_true
         self.calibration_window = calibration_window
         self.nsim = nsim
+        self.save_curves = save_curves
+        self.correct_monotonicity = correct_monotonicity
+
+        # Dates and timestamps
+        # Test
         self.test_start_date = test_start_date
         self.test_start = pd.Timestamp(test_start_date) # Time information automatically set at 00:00:00
         if test_end_date is None:
-            self.test_end_date = curves_forecaster.features_pred_.data.index[-1].date()
+            self.test_end_date = curves_forecaster.endog_pred_.index[-1].date()
         else:
             self.test_end_date = test_end_date
         self.test_end = pd.Timestamp(self.test_end_date) + datetime.timedelta(hours=23) # Time information set to 23:00:00
         self.test_timestamps = pd.date_range(start=self.test_start, end=self.test_end, freq='h')
-        self.save_curves = save_curves
-        self.correct_monotonicity = correct_monotonicity
+        # Calibration
+        self.calibration_start_date = self.test_start_date - self.calibration_window
+        self.calibration_end_date = self.test_start_date - datetime.timedelta(days=1)
+        self.calibration_start = pd.Timestamp(self.calibration_start_date) # Time information automatically set at 00:00:00
+        self.calibration_end = pd.Timestamp(self.calibration_end_date) + datetime.timedelta(hours=23) # Time information set to 23:00:00
 
 
-    def _simulate_features(self) -> np.ndarray:
-        # Initial calibration window
-        calibration_start_date = self.test_start_date - self.calibration_window
-        calibration_end_date = self.test_start_date - datetime.timedelta(days=1)
-        calibration_start = pd.Timestamp(calibration_start_date) # Time information automatically set at 00:00:00
-        calibration_end = pd.Timestamp(calibration_end_date) + datetime.timedelta(hours=23) # Time information set to 23:00:00
-
+    def _simulate_features(self, features_pred: pd.DataFrame, features_true: pd.DataFrame) -> np.ndarray:
         # Computing the features prediction errors needed for fitting the model
-        Y = self.forecaster.features_.data.loc[calibration_start:self.test_end, :]
-        Yhat = self.forecaster.features_pred_.data.loc[calibration_start:self.test_end, :]
+        Y = features_true.loc[self.calibration_start:self.test_end, :]
+        Yhat = features_pred.loc[self.calibration_start:self.test_end, :]
         errors = Y - Yhat
-        errors_initial = errors.loc[calibration_start:calibration_end, :] # Initial calibration set
+        errors_initial = errors.loc[self.calibration_start:self.calibration_end, :] # Initial calibration set
         
         # Initial fit
         self.model.fit(errors_initial)
@@ -891,9 +876,8 @@ class PriceProbabilisticForecaster:
         prices_sim = pd.DataFrame(index=self.test_timestamps, columns=range(self.nsim))
 
         for i in trange(self.nsim):
-            features = pd.DataFrame(features_sim[..., i], columns=self.forecaster.features_pred_.data.columns, index=self.test_timestamps)
-            features = SupplyDemandEmbedding(features, self.forecaster.transformer)
-            sd = features.inverse_transform()
+            features = pd.DataFrame(features_sim[..., i], columns=self.forecaster.endog_pred_.columns, index=self.test_timestamps)
+            sd = self.forecaster.transformer.inverse_transform(features)
             if self.correct_monotonicity:
                 sd = sd.correct_monotonicity()
             if save_curves:
@@ -903,12 +887,14 @@ class PriceProbabilisticForecaster:
         return prices_sim
     
     
-    def _simulate_fpca_approx_error(self) -> pd.DataFrame:
-        sd_approx = self.forecaster.features_.inverse_transform()
+    def _simulate_fpca_approx_error(self, sd_true: SupplyDemandTimeSeries) -> pd.DataFrame:
+        prices_true = sd_true[self.calibration_start:self.test_end].get_clearing_prices(return_series=True, verbose=False)
+        features = self.forecaster.transformer.transform(sd_true[self.calibration_start:self.test_end])
+        sd_approx = self.forecaster.transformer.inverse_transform(features)
         if self.correct_monotonicity:
             sd_approx = sd_approx.correct_monotonicity()
         prices_approx = sd_approx.get_clearing_prices(return_series=True, verbose=False)
-        approx_errors = self.prices_true - prices_approx
+        approx_errors = prices_true - prices_approx
         
         daily_timestamps = pd.date_range(self.test_start_date, self.test_end_date, freq="d")
         n_days = len(daily_timestamps)
@@ -927,17 +913,21 @@ class PriceProbabilisticForecaster:
         return pd.DataFrame(approx_errors_sims, index=self.test_timestamps, columns=range(self.nsim))
     
 
-    def simulate_prices(self):
+    def simulate_prices(self, sd_pred: SupplyDemandTimeSeries, sd_true: SupplyDemandTimeSeries):
         ndays = (self.test_end_date - self.test_start_date).days + 1
+        # We take sd_pred argument for consistency, but we already stored the curves features
+        # so we don't need sd_pred to get the predicted features
+        features_pred = self.forecaster.endog_pred_
+        features_true = self.forecaster.transformer.transform(sd_true)
         logging.info(f"Simulating features for {ndays} days from {self.test_start_date} to {self.test_end_date}...")
-        features_sim = self._simulate_features()
+        features_sim = self._simulate_features(features_pred, features_true)
         logging.info("Done.")
-        logging.info("Backtransforming to curves representation and finding "
+        logging.info("Inverse-transforming to curves representation and finding "
                      f"clearing price for each of {self.nsim} simulations...")
         prices_sim = self._get_clearing_prices(features_sim, self.save_curves)
         logging.info("Simulating the price error due to FPCA curves approximation "
                      f"for {ndays} days from {self.test_start_date} to {self.test_end_date}...")
-        prices_sim = prices_sim + self._simulate_fpca_approx_error()
+        prices_sim = prices_sim + self._simulate_fpca_approx_error(sd_true)
         logging.info("Done")
         return prices_sim
     
