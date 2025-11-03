@@ -106,6 +106,7 @@ class LassoVARX:
             var_structure='concurrent',
             exog_structure='concurrent',
             daytype_dummies=['is_Holiday', 'is_Monday', 'is_Saturday'],
+            exog_conc_no_lag=None,
             calibration_window=datetime.timedelta(days=358),
             criterion='aic',
             max_iter=2500,
@@ -125,6 +126,7 @@ class LassoVARX:
         self.lags_endogs = lags_endog
         self.lags_exog = lags_exog
         self.daytype_dummies = daytype_dummies
+        self.exog_conc_no_lag = exog_conc_no_lag
         self.ar_structure = ar_structure
         self.var_structure = var_structure
         self.exog_structure = exog_structure
@@ -135,6 +137,10 @@ class LassoVARX:
         self.ignore_convergence_warnings = ignore_convergence_warnings
         self.show_features = show_features
         self.random_state = random_state
+        if self.exog_conc_no_lag:
+            self.conc_no_lag_vars = self.daytype_dummies + self.exog_conc_no_lag
+        else:
+            self.conc_no_lag_vars = self.daytype_dummies
 
     # TODO: Reorganize this method
     def _build_XY(self, endog, exog):
@@ -166,9 +172,9 @@ class LassoVARX:
             X_h_lagged_list = []
             for lag in self.lags_exog:
                 if lag == 0:
-                    X_h_lagged_list.append(X_h.rename(columns=lambda x: f"{x}_h{h}" if x not in self.daytype_dummies else x))
+                    X_h_lagged_list.append(X_h.rename(columns=lambda x: f"{x}_h{h}" if x not in self.conc_no_lag_vars else x))
                 else:
-                    X_h_lagged_list.append(X_h.drop(self.daytype_dummies, axis=1).shift(lag).rename(columns=lambda x: f"{x}_h{h}_L{lag}"))
+                    X_h_lagged_list.append(X_h.drop(self.conc_no_lag_vars, axis=1).shift(lag).rename(columns=lambda x: f"{x}_h{h}_L{lag}"))
             X_h_lagged = pd.concat(X_h_lagged_list, axis=1)
             X_h_lagged.index = X_h_lagged.index.date
             X_lagged[h] = X_h_lagged
@@ -190,8 +196,8 @@ class LassoVARX:
                 if self.exog_structure == 'concurrent':
                     X_h = X_lagged[h]
                 elif self.exog_structure == 'full':
-                    # We drop the daytype dummies for the other hours to avoid duplicates
-                    X_h = pd.concat([X_lagged[j] if j == h else X_lagged[j].drop(self.daytype_dummies, axis=1) for j in range(24)], axis=1)
+                    # We drop the variables which are not concerned by the lags and the full structure
+                    X_h = pd.concat([X_lagged[j] if j == h else X_lagged[j].drop(self.conc_no_lag_vars, axis=1) for j in range(24)], axis=1)
                 else:
                     raise ValueError("exog_structure must be either 'concurrent' or 'full'")
 
