@@ -637,6 +637,81 @@ class SupplyDemandTimeSeries:
         return sdts_pred
     
 
+def concat_sdts(
+        sdts_list: list["SupplyDemandTimeSeries"],
+        sort: bool = True,
+        check_duplicates: bool = True,
+    ) -> "SupplyDemandTimeSeries":
+    """
+    Concatenates multiple SupplyDemandTimeSeries objects into one.
+
+    Args:
+        sdts_list (list[SupplyDemandTimeSeries]): List of SDTS objects to concatenate.
+        sort (bool, optional): Whether to sort the resulting series by timestamp.
+            Defaults to True.
+        check_duplicates (bool, optional): Whether to check for duplicate timestamps
+            after concatenation. Raises ValueError if duplicates are found.
+            Defaults to True.
+
+    Returns:
+        SupplyDemandTimeSeries: Concatenated object.
+    """
+    if not sdts_list:
+        raise ValueError("The input list is empty.")
+    if len(sdts_list) == 1:
+        return sdts_list[0].copy()
+
+    # # --- Consistency checks ---
+    base_grid = sdts_list[0].price_grid
+    base_extrap_supply = sdts_list[0].supply.extrapolation
+    base_extrap_demand = sdts_list[0].demand.extrapolation
+
+    # for i, sdts in enumerate(sdts_list[1:], start=1):
+    #     if not np.array_equal(sdts.price_grid, base_grid):
+    #         raise ValueError(f"Price grid mismatch between element 0 and element {i}.")
+    #     if sdts.supply.extrapolation != base_extrap_supply:
+    #         raise ValueError(f"Supply extrapolation mismatch between element 0 and element {i}.")
+    #     if sdts.demand.extrapolation != base_extrap_demand:
+    #         raise ValueError(f"Demand extrapolation mismatch between element 0 and element {i}.")
+
+    # --- Concatenate efficiently ---
+    supply_matrices = [sdts.supply.data_matrix for sdts in sdts_list]
+    demand_matrices = [sdts.demand.data_matrix for sdts in sdts_list]
+    timestamps = [ts for sdts in sdts_list for ts in sdts.timestamps]
+
+    supply_concat = np.concatenate(supply_matrices, axis=0)
+    demand_concat = np.concatenate(demand_matrices, axis=0)
+
+    supply = FDataGrid(
+        data_matrix=supply_concat,
+        grid_points=base_grid,
+        sample_names=timestamps,
+    )
+    demand = FDataGrid(
+        data_matrix=demand_concat,
+        grid_points=base_grid,
+        sample_names=timestamps,
+    )
+
+    supply.extrapolation = base_extrap_supply
+    demand.extrapolation = base_extrap_demand
+
+    # --- Optional sorting ---
+    if sort:
+        idx = np.argsort(pd.to_datetime(timestamps))
+        supply = supply[idx]
+        demand = demand[idx]
+
+    # --- Optional duplicate check ---
+    if check_duplicates:
+        ts = pd.Index(supply.sample_names)
+        if ts.has_duplicates:
+            duplicates = ts[ts.duplicated()].unique()
+            raise ValueError(f"Duplicate timestamps found: {list(duplicates)}")
+
+    return SupplyDemandTimeSeries(supply, demand)
+    
+
 def load_sdts(path: str) -> SupplyDemandTimeSeries:
     with open(path, "rb") as file:
         sdts = pickle.load(file)
