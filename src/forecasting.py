@@ -22,7 +22,7 @@ from sklearn.linear_model import LassoLarsIC, Lasso, LassoCV, LinearRegression
 import pmdarima as pm
 from sklearn.preprocessing import StandardScaler
 from sklearn.exceptions import ConvergenceWarning
-from src.curves import SupplyDemandTimeSeries, SupplyDemandFPCA, SupplyDemandZST
+from src.curves import SupplyDemandTimeSeries, SupplyDemandFPCA, SupplyDemandZST, concat_sdts
 from src.preprocessing import ExogPreprocessor
 from joblib import Parallel, delayed
 
@@ -159,8 +159,6 @@ class LassoVARX:
                     containing the features to give as input to the model: exogenous variables and lagged endogenous values.
         """
         if not endog.index.equals(exog.index):
-            print(endog.index)
-            print(exog.index)
             raise ValueError("endog and exog must have the same index")
 
         Xs = {}
@@ -349,7 +347,7 @@ class LassoVARX:
 
     
     
-    def _fit_forecast_from_XY(self, Ys: Dict[str, pd.DataFrame], Xs: Dict[str, Dict[int, pd.DataFrame]], test_start: datetime.date, verbose=True):
+    def _fit_forecast_from_XY(self, Ys: Dict[str, pd.DataFrame], Xs: Dict[str, Dict[int, pd.DataFrame]], test_start: datetime.date):
         """Private method for performing fit_forecast from the XY form"""
         index = next(iter(Ys.values())).index
         if test_start - self.calibration_window < index[0]:
@@ -359,14 +357,12 @@ class LassoVARX:
         select_test = index >= test_start
         
         Ys_train = {var: Y.loc[select_train, :] for var, Y in Ys.items()}
-        # Ys_test = {var: Y.loc[select_test, :] for var, Y in Ys.items()}
 
         Xs_train = {var: {h: X.loc[select_train, :] for h, X in X_hours.items()} for var, X_hours in Xs.items()}
         Xs_test = {var: {h: X.loc[select_test, :] for h, X in X_hours.items()} for var, X_hours in Xs.items()}
 
-        if verbose:
-            logging.info("Training period is from {} to {}".format(index[select_train][0], index[select_train][-1]))
-            logging.info("Forecasting period is from {} to {}".format(index[select_test][0], index[select_test][-1]))
+        logging.debug("Training period is from {} to {}".format(index[select_train][0], index[select_train][-1]))
+        logging.debug("Forecasting period is from {} to {}".format(index[select_test][0], index[select_test][-1]))
 
         self.fit(Xs_train, Ys_train)
         Ys_pred = self.predict(Xs_test)
@@ -375,7 +371,7 @@ class LassoVARX:
         return Y_pred
     
 
-    def fit_forecast(self, endog: pd.DataFrame, exog: pd.DataFrame, test_start: datetime.date, verbose=True):
+    def fit_forecast(self, endog: pd.DataFrame, exog: pd.DataFrame, test_start: datetime.date):
         """
         Fit the model on the training data (period up to test_start) and performs rolling one-step ahead forecasts of all hours of the day simultaneously
         using the fitted model. The model is trained on the data from the calibration window before the test_start date and forecasts the values
@@ -391,7 +387,7 @@ class LassoVARX:
         """
         Ys, Xs = self._build_XY(endog, exog)
 
-        return self._fit_forecast_from_XY(Ys, Xs, test_start, verbose=verbose)
+        return self._fit_forecast_from_XY(Ys, Xs, test_start)
     
 
     def forecast(self, endog, exog):
@@ -441,7 +437,7 @@ class LassoVARX:
         return pd.concat(Y_preds)
     
 
-    def fit_forecast_daily_recal(self, endog, exog, test_start, verbose=False, show_progress=True):
+    def fit_forecast_daily_recal(self, endog, exog, test_start, show_progress=True):
         """
         Performs rolling one-step ahead forecasts of all hours of the day simultaneously using a model that is retrained every day on the calibration window.
         
@@ -476,13 +472,160 @@ class LassoVARX:
             Ys_new = {var: Y[:horizon] for var, Y in Ys.items()}
             Xs_new = {var: {h: X[:horizon] for h, X in X_hours.items()} for var, X_hours in Xs.items()}
 
-            Y_pred = self._fit_forecast_from_XY(Ys_new, Xs_new, horizon, verbose=verbose)
+            Y_pred = self._fit_forecast_from_XY(Ys_new, Xs_new, horizon)
 
             Y_preds.append(Y_pred)
-            # print("Daily recalibration complete for {}".format(current_datetime.date()))
 
         return pd.concat(Y_preds)
+        
+
+
+class SupplyDemandForecaster:
+    def __init__(
+            self,
+            model: LassoVARX,
+            preprocessor: ExogPreprocessor,
+            K_supply: int,
+            K_demand: int, 
+            transformer: str = 'fpca'
+        ):
+        self.model = model
+        self.preprocessor = preprocessor
+        self.K_supply = K_supply
+        self.K_demand = K_demand
+        if transformer not in ['fpca', 'zst']:
+            raise ValueError(f"embedding must be either 'fpca' or 'zst'. Got: {transformer}")
+        else:
+            self.transformer_name = transformer
+        self.scalers_endog_ = []
+        self.scalers_exog_ = []
+        self.transformers_ = []
+
+    def _transform_curves(self, sd: SupplyDemandTimeSeries) -> pd.DataFrame:
+        if self.transformer_name == 'zst':
+            transformer = SupplyDemandZST(self.K_supply, self.K_demand)
+        else:
+            transformer = SupplyDemandFPCA(self.K_supply, self.K_demand)
+        endog = transformer.fit_transform(sd)
+        self.transformer_ = transformer # This is the "current" transformer
+        self.transformers_.append(transformer)
+        scaler_endog = StandardScaler()
+        endog_scaled = scaler_endog.fit_transform(endog)
+        self.scaler_endog_ = scaler_endog # This is the "current" scaler
+        self.scalers_endog_.append(scaler_endog)
+        return pd.DataFrame(endog_scaled, columns=endog.columns, index=endog.index)
+
     
+    def _transform_exog(self, exog: pd.DataFrame, dummy_vars: list[str]) -> pd.DataFrame:
+        """
+        Transforms exogenous variables using standard normalization, excluding dummy variables.
+
+        Args:
+            exog (pd.DataFrame): Exogenous variable data.
+            dummy_vars (list[str]): List of dummy variable column names.
+
+        Returns:
+            pd.DataFrame: Transformed exogenous data.
+        """
+        exog_scaled = exog.copy()
+        num_vars = [var for var in exog.columns if var not in dummy_vars]
+        scaler_exog = StandardScaler()
+        exog_scaled.loc[:, num_vars] = scaler_exog.fit_transform(exog_scaled.loc[:, num_vars].to_numpy())
+        self.scaler_exog_ = scaler_exog # This is the "current" exog scaler
+        self.scalers_exog_.append(scaler_exog)
+        return exog_scaled
+    
+    def _unscale_endog(self, endog_scaled: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame(self.scaler_endog_.inverse_transform(endog_scaled),
+                            columns=endog_scaled.columns, index=endog_scaled.index)
+
+    def _inverse_transform_pred(self, endog: pd.DataFrame) -> SupplyDemandTimeSeries:
+        self.endog_pred_ = self._unscale_endog(endog)
+        return self.transformer_.inverse_transform(self.endog_pred_)
+    
+    
+    def _fit_forecast_day_ahead(
+            self,
+            sd: SupplyDemandTimeSeries,
+            exog: pd.DataFrame,
+        ) -> SupplyDemandTimeSeries:
+        endog_scaled = self._transform_curves(sd)
+        endog_scaled = endog_scaled.reindex(exog.index) # This will add rows with NaN for the forecasted day
+        exog_scaled = self._transform_exog(exog, self.preprocessor.dummy_columns)
+        endog_scaled_pred = self.model.fit_forecast(endog_scaled, exog_scaled, test_start=exog.index[-1].date())
+        return self._inverse_transform_pred(endog_scaled_pred)
+    
+
+    def fit_forecast_rolling(
+            self,
+            sd: SupplyDemandTimeSeries,
+            exog: pd.DataFrame,
+            test_start: datetime.date,
+            correct: bool = True,
+            show_progress: bool = True,
+        ) -> SupplyDemandTimeSeries:
+
+        if self.transformer_name == 'fpca':
+            sd_prep = sd.smooth(bandwidth=1)
+        else:
+            sd_prep = sd.copy()
+
+        sd_preds = []
+        end_ts = sd.timestamps[-1]
+        n_days = (end_ts - pd.Timestamp(test_start)).days + 1
+
+        if show_progress:
+            progress_iter = trange(n_days, desc="Daily Recalibration Progress")
+        else:
+            progress_iter = range(n_days)
+
+        for i in progress_iter:
+            forecast_date = test_start + datetime.timedelta(days=i)
+            forecast_start_ts = pd.Timestamp(forecast_date) # Time information automatically set at 00:00:00
+            forecast_end_ts = pd.Timestamp(forecast_date) + datetime.timedelta(hours=23)
+            train_start_ts = forecast_start_ts - self.model.calibration_window
+            train_end_ts = forecast_start_ts - datetime.timedelta(hours=1)
+            preprocess_start_ts = train_start_ts - datetime.timedelta(weeks=1) # We need one week of past data to compute the lags
+
+            sd_pred = self._fit_forecast_day_ahead(
+                sd_prep[preprocess_start_ts:train_end_ts],
+                exog[preprocess_start_ts:forecast_end_ts]
+            )
+
+            sd_preds.append(sd_pred)
+
+        sd_pred = concat_sdts(sd_preds)
+
+        if correct:
+            return sd_pred.correct_monotonicity()
+        else:
+            return sd_pred
+
+
+    
+    def to_pickle(self, path: str, verbose=False):
+        if not path.endswith('.pkl'):
+            logging.warning("It's recommended to provide a path with a .pkl (pickle) extension.")
+        if not os.path.isdir(os.path.dirname(path)):
+            raise ValueError(f"The directory {os.path.dirname(path)} does not exist.")
+        else:
+            with open(path, 'wb') as f:
+                pickle.dump(self, f)
+            if verbose:
+                logging.info(f"Forecaster saved to {path}")
+
+
+def load_sdf(path: str, verbose=False) -> SupplyDemandForecaster:
+    if not os.path.isfile(path):
+        raise ValueError(f"The file {path} does not exist.")
+    else:
+        with open(path, 'rb') as f:
+            sdf = pickle.load(f)
+        if verbose:
+            logging.info(f"Forecaster loaded from {path}")
+        return sdf
+
+
 
 class AutoARIMAperHour:
     def __init__(self, auto_arima_kwargs: Dict[str, Any]):
@@ -714,103 +857,6 @@ class MultivariateAutoARIMAperHour:
         q: float,
     ) -> pd.DataFrame:
         return pd.DataFrame(np.quantile(pred_sim, q, axis=2), index=self.predict_index, columns=self.endog_colnames)
-
-        
-
-
-class SupplyDemandForecaster:
-    def __init__(
-            self,
-            model: LassoVARX,
-            preprocessor: ExogPreprocessor,
-            K_supply: int,
-            K_demand: int, 
-            transformer: str = 'fpca'
-        ):
-        self.model = model
-        self.preprocessor = preprocessor
-        self.K_supply = K_supply
-        self.K_demand = K_demand
-        self.transformer_name = transformer
-        if transformer not in ['fpca', 'zst']:
-            raise ValueError(f"embedding must be either 'fpca' or 'zst'. Got: {transformer}")
-        elif transformer == 'zst':
-            self.transformer = SupplyDemandZST(K_supply, K_demand)
-        else:
-            self.transformer = SupplyDemandFPCA(K_supply, K_demand)
-
-    def _transform_curves(self, sd: SupplyDemandTimeSeries) -> pd.DataFrame:
-        if self.transformer_name == 'fpca':
-            sd_to_transform = sd.smooth(bandwidth=1)
-        else:
-            sd_to_transform = sd.copy()
-        endog = self.transformer.fit_transform(sd_to_transform)
-        self.scaler_endog_ = StandardScaler()
-        endog_scaled = pd.DataFrame(self.scaler_endog_.fit_transform(endog), columns=endog.columns,
-                         index=endog.index)
-        return endog_scaled
-    
-    def _transform_exog(self, exog: pd.DataFrame, dummy_vars: list[str]) -> pd.DataFrame:
-        """
-        Transforms exogenous variables using standard normalization, excluding dummy variables.
-
-        Args:
-            exog (pd.DataFrame): Exogenous variable data.
-            dummy_vars (list[str]): List of dummy variable column names.
-
-        Returns:
-            pd.DataFrame: Transformed exogenous data.
-        """
-        self.scaler_exog_ = StandardScaler()
-        exog_scaled = exog.copy()
-        num_vars = [var for var in exog.columns if var not in dummy_vars]
-        exog_scaled.loc[:, num_vars] = self.scaler_exog_.fit_transform(exog_scaled.loc[:, num_vars].to_numpy())
-        return exog_scaled
-    
-    def _unscale_endog(self, endog_scaled: pd.DataFrame) -> pd.DataFrame:
-        return pd.DataFrame(self.scaler_endog_.inverse_transform(endog_scaled),
-                            columns=endog_scaled.columns, index=endog_scaled.index)
-
-    def _inverse_transform_pred(self, endog: pd.DataFrame) -> SupplyDemandTimeSeries:
-        self.endog_pred_ = self._unscale_endog(endog)
-        return self.transformer.inverse_transform(self.endog_pred_)
-
-    def fit_forecast(
-            self,
-            sd: SupplyDemandTimeSeries,
-            exog: pd.DataFrame,
-            test_start: datetime.date,
-            recalibration: str = None,
-            correct: bool = True,
-            show_progress: bool = True
-        ) -> SupplyDemandTimeSeries:
-        endog = self._transform_curves(sd)
-        exog_transformed = self._transform_exog(exog, self.preprocessor.dummy_columns)
-        if recalibration is None:
-            endog_pred = self.model.fit_forecast(endog, exog_transformed, test_start)
-        elif recalibration == 'daily':
-            endog_pred = self.model.fit_forecast_daily_recal(endog, exog_transformed, test_start, show_progress=show_progress)
-        elif recalibration == 'monthly':
-            endog_pred = self.model.fit_forecast_monthly_recal(endog, exog_transformed, test_start)
-        else:
-            raise ValueError("recalibration must be either None, 'daily' or 'monthly'")
-        sd_pred = self._inverse_transform_pred(endog_pred)
-        if correct:
-            sd_pred = sd_pred.correct_monotonicity()
-
-        return sd_pred
-    
-    def to_pickle(self, path: str, verbose=False):
-        if not path.endswith('.pkl'):
-            logging.warning("It's recommended to provide a path with a .pkl (pickle) extension.")
-        if not os.path.isdir(os.path.dirname(path)):
-            raise ValueError(f"The directory {os.path.dirname(path)} does not exist.")
-        else:
-            with open(path, 'wb') as f:
-                pickle.dump(self, f)
-            if verbose:
-                logging.info(f"Forecaster saved to {path}")
-
 
 
 
