@@ -1,6 +1,7 @@
 """
 File implementing the LEAR model (Lago et al., 2021)
 """
+from tqdm import trange
 import datetime
 import numpy as np
 import pandas as pd
@@ -144,6 +145,7 @@ class LEAR:
             ar_structure='full',
             var_structure=None,
             exog_structure='full',
+            exog_conc_no_lag=['CH > IT', 'FR > IT'],
             daytype_dummies=['is_Holiday', 'is_Monday', 'is_Saturday'],
             calibration_window=calibration_window,
             **kwargs
@@ -198,26 +200,51 @@ class LEAR:
             transformed_df.loc[:, num_vars].to_numpy())
         return transformed_df
     
+
+    def _fit_forecast_day_ahead(
+            self,
+            prices: pd.DataFrame,
+            exog: pd.DataFrame,
+        ) -> pd.DataFrame:
+        prices_transformed = self._transform_prices(prices)
+        prices_transformed = prices_transformed.reindex(exog.index) # This will add rows with NaN for the forecasted day
+        exog_transformed= self._transform_exog(exog, self.exog_preprocessor.dummy_columns)
+        endog_scaled_pred = self.model.fit_forecast(prices_transformed, exog_transformed, test_start=exog.index[-1].date())
+        return self._inverse_transform_prices(endog_scaled_pred)
     
-    def fit_forecast(
+
+    def fit_forecast_rolling(
             self,
             prices: pd.DataFrame,
             exog: pd.DataFrame,
             test_start: datetime.date,
-            recalibration: str = None,
+            show_progress: bool = True,
         ) -> pd.DataFrame:
-        prices_transformed = self._transform_prices(prices)
-        exog_transformed = self._transform_exog(exog, self.exog_preprocessor.dummy_columns)
-        if recalibration is None:
-            transformed_pred = self.model.fit_forecast(prices_transformed, exog_transformed, test_start)
-        elif recalibration == 'daily':
-            transformed_pred = self.model.fit_forecast_daily_recal(prices_transformed, exog_transformed, test_start)
-        elif recalibration == 'monthly':
-            transformed_pred = self.model.fit_forecast_monthly_recal(prices_transformed, exog_transformed, test_start)
+        prices_preds = []
+        end_ts = prices.index[-1]
+        n_days = (end_ts - pd.Timestamp(test_start)).days + 1
+
+        if show_progress:
+            progress_iter = trange(n_days, desc="Daily Recalibration Progress")
         else:
-            raise ValueError("Recalibration must be either None, 'daily' or 'monthly'")
-        prices_pred = self._inverse_transform_prices(transformed_pred)
-        return prices_pred
+            progress_iter = range(n_days)
+
+        for i in progress_iter:
+            forecast_date = test_start + datetime.timedelta(days=i)
+            forecast_start_ts = pd.Timestamp(forecast_date) # Time information automatically set at 00:00:00
+            forecast_end_ts = pd.Timestamp(forecast_date) + datetime.timedelta(hours=23)
+            train_start_ts = forecast_start_ts - self.model.calibration_window
+            train_end_ts = forecast_start_ts - datetime.timedelta(hours=1)
+            preprocess_start_ts = train_start_ts - datetime.timedelta(weeks=1) # We need one week of past data to compute the lags
+
+            prices_pred = self._fit_forecast_day_ahead(
+                prices[preprocess_start_ts:train_end_ts],
+                exog[preprocess_start_ts:forecast_end_ts]
+            )
+
+            prices_preds.append(prices_pred)
+
+        return pd.concat(prices_preds, axis=0)
         
 
 
