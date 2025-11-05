@@ -1,5 +1,6 @@
 import logging
 import os
+import copy
 import datetime
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -21,6 +22,54 @@ from typing import Sequence, Any, Optional, Union, runtime_checkable, Protocol
 from .utils import find_zeros, is_strictly_monotonic, get_inverse_function
 
 
+###### Helper functions ######
+
+def _reduce_fpca(fpca: FPCA, n_components: int) -> FPCA:
+    fpca_new = copy.deepcopy(fpca)
+    if n_components >= fpca.n_components:
+        pass # No reduction needed
+    else:
+        fpca_new.n_components = n_components
+        fpca_new.components_ = fpca.components_[:n_components]
+        fpca_new.explained_variance_ = fpca.explained_variance_[:n_components]
+        fpca_new.explained_variance_ratio_ = fpca.explained_variance_ratio_[:n_components]
+        fpca_new.singular_values_ = fpca.singular_values_[:n_components]
+    return fpca_new
+
+def _incremental_inverse(fpca: FPCA, scores: np.ndarray):
+    """Compute incremental FPCA inverse reconstructions efficiently.
+
+    Generates a sequence of reconstructions using 1..n_components of the
+    FPCA, building them incrementally to avoid redundant computation.
+    Works with `FDataGrid` objects.
+
+    Args:
+        fpca (FPCA):
+            A fitted FPCA object with `components_` and `mean_` attributes.
+        scores (np.ndarray):
+            Array of FPCA scores with shape (n_samples, n_components).
+
+    Returns:
+        list[FDataGrid]:
+            A list of reconstructed `FDataGrid` objects. The i-th element
+            corresponds to the reconstruction using the first (i+1)
+            principal components.
+    """
+    partial = fpca.mean_.copy()
+    recons = []
+
+    for k in range(fpca.n_components):
+        addition = fpca.components_[k].copy(
+            data_matrix=scores[:, k][:, np.newaxis, np.newaxis] * fpca.components_[k].data_matrix,
+            sample_names=(None,) * scores.shape[0]
+        )
+        partial = partial + addition
+        recons.append(partial.copy())
+
+    return recons
+
+
+###### Classes ######
 
 class ZielSteinertTransformer:
     """Transformer for discretizing and reconstructing electricity supply or demand curves
@@ -305,6 +354,25 @@ class SupplyDemandFPCA(SupplyDemandTransformer):
         self.transformer_supply_ = FPCA(n_components=self.K_supply).fit(sd.supply)
         self.transformer_demand_ = FPCA(n_components=self.K_demand).fit(sd.demand)
         return self
+    
+    def reduce(self, new_K_supply: int, new_K_demand: int) -> "SupplyDemandFPCA":
+        """Return a new SupplyDemandFPCA with reduced number of components.
+
+        Args:
+            new_K_supply (int): New number of supply components.
+            new_K_demand (int): New number of demand components.
+
+        Returns:
+            SupplyDemandFPCA: New instance with reduced components.
+        """
+        new_instance = copy.deepcopy(self)
+        new_instance.K_supply = new_K_supply
+        new_instance.K_demand = new_K_demand
+        new_instance.supply_features_names = [f'FPC{i}o' for i in range(1, new_K_supply + 1)]
+        new_instance.demand_features_names = [f'FPC{i}b' for i in range(1, new_K_demand + 1)]
+        new_instance.transformer_supply_ = _reduce_fpca(self.transformer_supply_, new_K_supply)
+        new_instance.transformer_demand_ = _reduce_fpca(self.transformer_demand_, new_K_demand)
+        return new_instance
     
 
 @dataclass
