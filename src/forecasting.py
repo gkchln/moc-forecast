@@ -22,7 +22,10 @@ from sklearn.linear_model import LassoLarsIC, Lasso, LassoCV, LinearRegression
 import pmdarima as pm
 from sklearn.preprocessing import StandardScaler
 from sklearn.exceptions import ConvergenceWarning
-from src.curves import SupplyDemandTimeSeries, SupplyDemandFPCA, SupplyDemandZST, concat_sdts
+from kneed import KneeLocator
+from skfda.representation import FDataGrid
+from skfda.preprocessing.dim_reduction import FPCA
+from src.curves import SupplyDemandTimeSeries, SupplyDemandFPCA, SupplyDemandZST, concat_sdts, _incremental_inverse
 from src.preprocessing import ExogPreprocessor
 from joblib import Parallel, delayed
 
@@ -287,8 +290,8 @@ class LassoVARX:
 
                     if self.criterion != 'cv':
                         if X.shape[1] > X.shape[0]:
-                            raise ValueError(f"Cannot use criterion '{self.criterion}' when number of features ({X.shape[1]}) is greater \
-                                            than number of samples ({X.shape[0]}). Consider using 'cv' instead.")
+                            raise ValueError(f"Cannot use criterion '{self.criterion}' when number of features ({X.shape[1]}) is greater"
+                                            f"than number of samples ({X.shape[0]}). Consider using 'cv' instead.")
                         param_model = LassoLarsIC(criterion=self.criterion, max_iter=self.max_iter)
                         param = param_model.fit(X, Y.loc[:, h]).alpha_
                         if param == 0:
@@ -478,35 +481,161 @@ class LassoVARX:
 
         return pd.concat(Y_preds)
         
+MAX_K_SUPPLY = 30
+MAX_K_DEMAND = 20
+VAR_RATIO_THRESHOLD = 0.99
 
 
 class SupplyDemandForecaster:
     def __init__(
             self,
             model: LassoVARX,
-            preprocessor: ExogPreprocessor,
-            K_supply: int,
-            K_demand: int, 
-            transformer: str = 'fpca'
+            exog_prep: ExogPreprocessor,
+            transformer: str = 'fpca',
+            K_supply: int | None = None,
+            K_demand: int | None = None,
+            choice_K: str | None = 'elbow',
         ):
         self.model = model
-        self.preprocessor = preprocessor
-        self.K_supply = K_supply
-        self.K_demand = K_demand
+        self.exog_prep = exog_prep
+
         if transformer not in ['fpca', 'zst']:
             raise ValueError(f"embedding must be either 'fpca' or 'zst'. Got: {transformer}")
-        else:
-            self.transformer_name = transformer
+        self.transformer_name = transformer
+
+        if transformer == 'zst':
+            if K_supply is None or K_demand is None:
+                raise ValueError("K_supply and K_demand must be provided when using ZST transformer.")
+            elif (K_supply < 2) or (K_demand < 2):
+                raise ValueError("K_supply and K_demand must be at least 2 for ZST transformer. "
+                                 f"Got: K_supply: {K_demand}, K_demand: {K_supply}")
+            
+        if transformer == 'fpca':
+            if choice_K:
+                if choice_K not in ['threshold', 'elbow', 'elbow-mcp']:
+                    raise ValueError(f"choice_K must be either None, 'threshold', 'elbow' or 'elbow-mcp'. Got: {choice_K}")
+            else:
+                if K_supply is None or K_demand is None:
+                    raise ValueError("Either choice_K or both K_supply and K_demand must be provided.")
+
+        self.choice_K = choice_K
+        self.K_supply = K_supply
+        self.K_demand = K_demand
+
         self.scalers_endog_ = []
         self.scalers_exog_ = []
         self.transformers_ = []
+        self.K_supply_ = []
+        self.K_demand_ = []
+
+
+    @staticmethod
+    def _get_elbows(fpca_sd: SupplyDemandFPCA) -> tuple[int, int]:
+        cumvar_supply = fpca_sd.transformer_supply_.explained_variance_ratio_.cumsum()
+        cumvar_demand = fpca_sd.transformer_demand_.explained_variance_ratio_.cumsum()
+        K_supply = KneeLocator(range(1, len(cumvar_supply)+1), cumvar_supply).knee
+        K_demand = KneeLocator(range(1, len(cumvar_demand)+1), cumvar_demand).knee
+        return K_supply, K_demand
+    
+    
+    @staticmethod
+    def _get_thresholds(fpca_sd: SupplyDemandFPCA,
+                        threshold: float = VAR_RATIO_THRESHOLD) -> tuple[int, int]:
+        cumvar_supply = fpca_sd.transformer_supply_.explained_variance_ratio_.cumsum()
+        cumvar_demand = fpca_sd.transformer_demand_.explained_variance_ratio_.cumsum()
+        K_supply = np.argmax(cumvar_supply >= threshold) + 1
+        K_demand = np.argmax(cumvar_demand >= threshold) + 1
+        return K_supply, K_demand
+    
+
+    @staticmethod
+    def _get_mcp_elbows(fpca_sd: SupplyDemandFPCA, sd: SupplyDemandTimeSeries) -> tuple[int, int]:
+        """Compute the optimal number of FPCs (elbows) for supply and demand.
+
+        This function determines the number of principal components to retain
+        for both the supply and demand FPCA models by minimizing the mean
+        squared reconstruction error of the market clearing prices (MCP).
+        It uses an incremental Karhunen-Loève expansion to efficiently
+        reconstruct the functional data and the `KneeLocator` to detect
+        the elbow point in the error curve.
+
+        Args:
+            fpca_sd (SupplyDemandFPCA):
+                A fitted FPCA model containing both the supply and demand
+                functional principal component analyzers.
+            sd (SupplyDemandTimeSeries):
+                The original supply-demand time series.
+
+        Returns:
+            tuple[int, int]:
+                A tuple ``(K_supply, K_demand)`` representing the optimal
+                number of FPCs for supply and demand respectively.
+        """
+        # Precompute once
+        endog = fpca_sd.transform(sd)
+        mcp_true = sd.get_clearing_prices(verbose=False)
+
+        def _compute_elbow(fpca: FPCA, scores: np.ndarray, sd: SupplyDemandTimeSeries, is_supply: bool) -> int:
+            """Compute the elbow (optimal number of FPCs) for one FPCA (supply or demand) side."""
+            n_components = fpca.n_components
+            incremental_recons = _incremental_inverse(fpca, scores)
+            mse = np.empty(n_components)
+
+            sd_recons = sd.copy()
+            for i, fd in enumerate(incremental_recons):
+                fd.sample_names = sd.timestamps
+                if is_supply:
+                    sd_recons.supply = fd
+                else:
+                    sd_recons.demand = fd
+                mcp_recons = sd_recons.get_clearing_prices(verbose=False)
+                mse[i] = np.mean((mcp_true - mcp_recons) ** 2)
+
+            kl = KneeLocator(
+                range(1, n_components + 1),
+                mse,
+                curve="convex",
+                direction="decreasing"
+            )
+            return kl.knee
+
+        # Compute elbows using incremental reconstructions
+        K_supply = _compute_elbow(
+            fpca_sd.transformer_supply_,
+            endog[fpca_sd.supply_features_names].to_numpy(),
+            sd,
+            is_supply=True,
+        )
+
+        K_demand = _compute_elbow(
+            fpca_sd.transformer_demand_,
+            endog[fpca_sd.demand_features_names].to_numpy(),
+            sd,
+            is_supply=False,
+        )
+
+        return K_supply, K_demand
+    
 
     def _transform_curves(self, sd: SupplyDemandTimeSeries) -> pd.DataFrame:
         if self.transformer_name == 'zst':
-            transformer = SupplyDemandZST(self.K_supply, self.K_demand)
+            transformer = SupplyDemandZST(self.K_supply, self.K_demand).fit(sd)
         else:
-            transformer = SupplyDemandFPCA(self.K_supply, self.K_demand)
-        endog = transformer.fit_transform(sd)
+            if self.choice_K:
+                transformer = SupplyDemandFPCA(MAX_K_SUPPLY, MAX_K_DEMAND).fit(sd)
+                if self.choice_K == 'elbow':
+                    K_supply, K_demand = self._get_elbows(transformer)
+                elif self.choice_K == 'threshold':
+                    K_supply, K_demand = self._get_thresholds(transformer)
+                elif self.choice_K == 'elbow-mcp':
+                    K_supply, K_demand = self._get_mcp_elbows(transformer, sd)
+                self.K_supply_.append(K_supply)
+                self.K_demand_.append(K_demand)
+            else:
+                K_supply = self.K_supply
+                K_demand = self.K_demand
+            transformer = SupplyDemandFPCA(K_supply, K_demand).fit(sd)
+        endog = transformer.transform(sd)
         self.transformer_ = transformer # This is the "current" transformer
         self.transformers_.append(transformer)
         scaler_endog = StandardScaler()
@@ -551,7 +680,7 @@ class SupplyDemandForecaster:
         ) -> SupplyDemandTimeSeries:
         endog_scaled = self._transform_curves(sd)
         endog_scaled = endog_scaled.reindex(exog.index) # This will add rows with NaN for the forecasted day
-        exog_scaled = self._transform_exog(exog, self.preprocessor.dummy_columns)
+        exog_scaled = self._transform_exog(exog, self.exog_prep.dummy_columns)
         endog_scaled_pred = self.model.fit_forecast(endog_scaled, exog_scaled, test_start=exog.index[-1].date())
         return self._inverse_transform_pred(endog_scaled_pred)
     
