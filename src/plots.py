@@ -8,7 +8,7 @@ from .curves import SupplyDemandFPCA
 def plot_fpca_cumulative_variance(
         fpca_sd: SupplyDemandFPCA,
         fig: matplotlib.figure.Figure = None,
-        figsize=(12, 3),
+        figsize=(10, 3),
         **kwargs
     ) -> matplotlib.figure.Figure:
     cum_var = {}
