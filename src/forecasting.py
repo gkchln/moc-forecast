@@ -225,10 +225,12 @@ class LassoVARX:
 
                         Xs[y_target][h] = pd.concat([Xs[y_target][h], Xs[y_feature][h].loc[:, var_terms]], axis=1)
 
-                    if self.show_features:
-                        if (i == 0) & (h == 0):
-                            features = Xs[y_target][h].columns
-                            logging.info(f"{len(features)} features for {y_target} hour {h}: {features}")
+        if show_features:
+            target = endog.columns[0]
+            h = 0
+            features = list(Xs[target][h].columns)
+            features_str = "\n".join(features)  # each feature on a new line
+            logging.info(f"{len(features)} features for {target} hour {h}:\n{features_str}")
 
 
         return Ys, Xs
@@ -677,11 +679,13 @@ class SupplyDemandForecaster:
             self,
             sd: SupplyDemandTimeSeries,
             exog: pd.DataFrame,
+            show_features=False
         ) -> SupplyDemandTimeSeries:
         endog_scaled = self._transform_curves(sd)
         endog_scaled = endog_scaled.reindex(exog.index) # This will add rows with NaN for the forecasted day
-        exog_scaled = self._transform_exog(exog, self.exog_prep.dummy_columns)
-        endog_scaled_pred = self.model.fit_forecast(endog_scaled, exog_scaled, test_start=exog.index[-1].date())
+        exog_scaled = self._transform_exog(exog, self.dummy_vars)
+        endog_scaled_pred = self.model.fit_forecast(endog_scaled, exog_scaled, test_start=exog.index[-1].date(),
+                                                    show_features=show_features)
         return self._inverse_transform_pred(endog_scaled_pred)
     
 
@@ -692,6 +696,7 @@ class SupplyDemandForecaster:
             test_start: datetime.date,
             correct: bool = True,
             show_progress: bool = True,
+            show_features: bool = False
         ) -> SupplyDemandTimeSeries:
 
         if self.transformer_name == 'fpca':
@@ -718,7 +723,8 @@ class SupplyDemandForecaster:
 
             sd_pred = self._fit_forecast_day_ahead(
                 sd_prep[preprocess_start_ts:train_end_ts],
-                exog[preprocess_start_ts:forecast_end_ts]
+                exog[preprocess_start_ts:forecast_end_ts],
+                show_features = show_features & (i==0)
             )
 
             sd_preds.append(sd_pred)
