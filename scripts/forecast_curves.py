@@ -6,7 +6,7 @@ import logging
 
 from src.preprocessing import ExogPreprocessor
 from src.curves import load_sdts
-from src.forecasting import LassoVARX, SupplyDemandForecaster
+from src.forecasters import LassoVARX, SupplyDemandForecaster
 import argparse
 
 ### Fixed parameters ###
