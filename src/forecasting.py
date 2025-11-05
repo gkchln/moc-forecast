@@ -108,8 +108,9 @@ class LassoVARX:
             ar_structure='concurrent',
             var_structure='concurrent',
             exog_structure='concurrent',
+            exog_force_no_lag=None,
+            exog_force_concurrent=None,
             daytype_dummies=['is_Holiday', 'is_Monday', 'is_Saturday'],
-            exog_conc_no_lag=None,
             calibration_window=datetime.timedelta(days=358),
             criterion='aic',
             max_iter=2500,
@@ -129,7 +130,8 @@ class LassoVARX:
         self.lags_endogs = lags_endog
         self.lags_exog = lags_exog
         self.daytype_dummies = daytype_dummies
-        self.exog_conc_no_lag = exog_conc_no_lag
+        self._exog_concurrent = daytype_dummies + (exog_force_concurrent or [])
+        self._exog_no_lag = daytype_dummies + (exog_force_no_lag or [])
         self.ar_structure = ar_structure
         self.var_structure = var_structure
         self.exog_structure = exog_structure
@@ -138,15 +140,10 @@ class LassoVARX:
         self.tol = tol
         self.n_jobs = n_jobs
         self.ignore_convergence_warnings = ignore_convergence_warnings
-        self.show_features = show_features
         self.random_state = random_state
-        if self.exog_conc_no_lag:
-            self.conc_no_lag_vars = self.daytype_dummies + self.exog_conc_no_lag
-        else:
-            self.conc_no_lag_vars = self.daytype_dummies
 
     # TODO: Reorganize this method
-    def _build_XY(self, endog, exog):
+    def _build_XY(self, endog: pd.DataFrame, exog: pd.DataFrame, show_features=False):
         """
         From endogenous and exogenous multivariate time series, build the target and features for the model by pivoting every component of the endogenous variable
         to have daily observations of the 24 hours
@@ -167,19 +164,28 @@ class LassoVARX:
         Xs = {}
         Ys = {}
 
+
+        # Create the lagged exogenous variables with specified structure (concurrent or full)
         X_lagged = {}
         for h in range(24):
-            X_h = exog[exog.index.hour == h]
+            X_h = exog.loc[exog.index.hour == h, :]
+            rename = {x: (f"{x}_h{h}" if x not in self.daytype_dummies else x) for x in X_h.columns}
+            X_h.rename(rename, axis=1, inplace=True)
             X_h_lagged_list = []
+
             for lag in self.lags_exog:
                 if lag == 0:
-                    X_h_lagged_list.append(X_h.rename(columns=lambda x: f"{x}_h{h}" if x not in self.conc_no_lag_vars else x))
+                    X_h_lagged_list.append(X_h)
                 else:
-                    X_h_lagged_list.append(X_h.drop(self.conc_no_lag_vars, axis=1).shift(lag).rename(columns=lambda x: f"{x}_h{h}_L{lag}"))
+                    no_lag_cols = [rename[col] for col in self._exog_no_lag]
+                    X_h_lagged = X_h.drop(no_lag_cols, axis=1).shift(lag).rename(columns=lambda x: f"{x}_L{lag}")
+                    X_h_lagged_list.append(X_h_lagged)
+
             X_h_lagged = pd.concat(X_h_lagged_list, axis=1)
             X_h_lagged.index = X_h_lagged.index.date
             X_lagged[h] = X_h_lagged
 
+        # Build the targets and the features by adding autocorrelation and exogenous terms
         for var in endog.columns:
             # Build Y
             target_df = endog[var].reset_index()
@@ -198,7 +204,15 @@ class LassoVARX:
                     X_h = X_lagged[h]
                 elif self.exog_structure == 'full':
                     # We drop the variables which are not concerned by the lags and the full structure
-                    X_h = pd.concat([X_lagged[j] if j == h else X_lagged[j].drop(self.conc_no_lag_vars, axis=1) for j in range(24)], axis=1)
+                    drop_cols = self.daytype_dummies
+                    X_lagged_list = []
+                    for j in range(24):
+                        if j == h:
+                            X_lagged_list.append(X_lagged[j])
+                        else:
+                            drop_cols = [c for c in X_lagged[j].columns if any(s in c for s in self._exog_concurrent)]
+                            X_lagged_list.append(X_lagged[j].drop(columns=drop_cols))
+                    X_h = pd.concat(X_lagged_list, axis=1)
                 else:
                     raise ValueError("exog_structure must be either 'concurrent' or 'full'")
 
@@ -376,7 +390,7 @@ class LassoVARX:
         return Y_pred
     
 
-    def fit_forecast(self, endog: pd.DataFrame, exog: pd.DataFrame, test_start: datetime.date):
+    def fit_forecast(self, endog: pd.DataFrame, exog: pd.DataFrame, test_start: datetime.date, show_features=False):
         """
         Fit the model on the training data (period up to test_start) and performs rolling one-step ahead forecasts of all hours of the day simultaneously
         using the fitted model. The model is trained on the data from the calibration window before the test_start date and forecasts the values
@@ -390,7 +404,7 @@ class LassoVARX:
         Returns:
             pd.DataFrame: An hourly datetime-indexed dataframe containing the forecasted values for the test period.
         """
-        Ys, Xs = self._build_XY(endog, exog)
+        Ys, Xs = self._build_XY(endog, exog, show_features=show_features)
 
         return self._fit_forecast_from_XY(Ys, Xs, test_start)
     
@@ -492,14 +506,14 @@ class SupplyDemandForecaster:
     def __init__(
             self,
             model: LassoVARX,
-            exog_prep: ExogPreprocessor,
             transformer: str = 'fpca',
             K_supply: int | None = None,
             K_demand: int | None = None,
             choice_K: str | None = 'elbow',
+            dummy_vars: list[str] = ['is_Holiday', 'is_Monday', 'is_Saturday']
         ):
         self.model = model
-        self.exog_prep = exog_prep
+        self.dummy_vars = dummy_vars
 
         if transformer not in ['fpca', 'zst']:
             raise ValueError(f"embedding must be either 'fpca' or 'zst'. Got: {transformer}")
