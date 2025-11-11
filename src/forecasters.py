@@ -68,8 +68,8 @@ class SupplyDemandForecaster:
             
         if transformer == 'fpca':
             if choice_K:
-                if choice_K not in ['threshold', 'elbow', 'elbow-mcp']:
-                    raise ValueError(f"choice_K must be either None, 'threshold', 'elbow' or 'elbow-mcp'. Got: {choice_K}")
+                if choice_K not in ['threshold', 'elbow', 'threshold-elbow', 'elbow-mcp']:
+                    raise ValueError(f"choice_K must be either None, 'threshold', 'elbow', 'threshold-elbow' or 'elbow-mcp'. Got: {choice_K}")
             else:
                 if K_supply is None or K_demand is None:
                     raise ValueError("Either choice_K or both K_supply and K_demand must be provided.")
@@ -101,6 +101,14 @@ class SupplyDemandForecaster:
         cumvar_demand = fpca_sd.transformer_demand_.explained_variance_ratio_.cumsum()
         K_supply = np.argmax(cumvar_supply >= threshold) + 1
         K_demand = np.argmax(cumvar_demand >= threshold) + 1
+        return K_supply, K_demand
+    
+    @staticmethod
+    def _get_max_elbows_thresholds(fpca_sd: SupplyDemandFPCA) -> tuple[int, int]:
+        K_supply_e, K_demand_e = SupplyDemandForecaster._get_elbows(fpca_sd)
+        K_supply_t, K_demand_t = SupplyDemandForecaster._get_thresholds(fpca_sd)
+        K_supply = max(K_supply_e, K_supply_t)
+        K_demand = max(K_demand_e, K_demand_t)
         return K_supply, K_demand
     
 
@@ -183,6 +191,8 @@ class SupplyDemandForecaster:
                     K_supply, K_demand = self._get_elbows(transformer)
                 elif self.choice_K == 'threshold':
                     K_supply, K_demand = self._get_thresholds(transformer)
+                elif self.choice_K == 'threshold-elbow':
+                    K_supply, K_demand = self._get_max_elbows_thresholds(transformer)
                 elif self.choice_K == 'elbow-mcp':
                     K_supply, K_demand = self._get_mcp_elbows(transformer, sd)
                 self.K_supply_.append(K_supply)
