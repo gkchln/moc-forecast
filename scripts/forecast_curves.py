@@ -26,6 +26,9 @@ lags_exog = [0, 1, 7]
 
 exog_structure = 'concurrent'
 
+exog_force_concurrent = None
+exog_force_no_lag = None
+
 criterion = 'aic'
 
 def main(
@@ -34,6 +37,7 @@ def main(
         save_folder,
         K_supply,
         K_demand,
+        choice_K,
         transformer,
         ar_structure,
         var_structure,
@@ -46,15 +50,16 @@ def main(
 
     ### Setup logging ###
     run_name = "{ar_struc}_{var_struc}_{lags_endog}_{exog_struc}_{lags_exog}_{transformer}" \
-    "_{K_supply}_{K_demand}_{calib_wind}_{criterion}_{test_start}_{test_end}".format(
+    "_{K_supply}_{K_demand}_{choice_K}_{calib_wind}_{criterion}_{test_start}_{test_end}".format(
         ar_struc = str(ar_structure).lower()[:4], # 'conc' or 'full'
         var_struc = str(var_structure).lower()[:4], # 'conc', 'full' or 'none'
         lags_endog = ''.join(map(str, lags_endog)), # e.g. '1237' for lags 1, 2, 3 and 7
         exog_struc = str(exog_structure).lower()[:4], # 'conc' or 'full'
         lags_exog = ''.join(map(str, lags_exog)), # e.g. '017' for lags 0, 1 and 7
         transformer = transformer, # 'fpca' or 'zst'
-        K_supply = K_supply,
-        K_demand = K_demand,
+        K_supply = K_supply or 'none',
+        K_demand = K_demand or 'none',
+        choice_K = choice_K or 'none',
         calib_wind = calibration_window.days,
         criterion = criterion, 
         test_start = test_start_date.strftime('%Y%m%d'), # e.g. 20240101
@@ -112,20 +117,22 @@ def main(
         var_structure=var_structure,
         exog_structure=exog_structure,
         calibration_window=calibration_window,
+        exog_force_concurrent=exog_force_concurrent,
+        exog_force_no_lag=exog_force_no_lag,
         criterion=criterion,
-        daytype_dummies=exogprep.dummy_columns,
-        random_state=random_state
+        random_state=42,
+        n_jobs=-1,
     )
 
     forecaster = SupplyDemandForecaster(
         model,
-        exogprep,
+        transformer=transformer,
+        choice_K=choice_K,
         K_supply=K_supply,
-        K_demand=K_demand,
-        transformer=transformer
+        K_demand=K_demand
     )
 
-    sd_pred = forecaster.fit_forecast(sd, exog, test_start=test_start_date, recalibration='daily', show_progress=show_progress)
+    sd_pred = forecaster.fit_forecast_rolling(sd, exog, test_start_date, show_progress=show_progress)
 
     ### Save results ###
     outputs = ['curves', 'forecasters']
@@ -153,6 +160,8 @@ if __name__ == "__main__":
     parser.add_argument("--transformer", dest="transformer", choices=["fpca", "zst"], help="Curve transformer to use ('fpca' or 'zst')")
     parser.add_argument("--ar_structure", dest="ar_structure", choices=["concurrent", "full"], help="Autoregressive structure ('concurrent' or 'full')")
     parser.add_argument("--var_structure", dest="var_structure", choices=["concurrent", "full", "none"], help="VAR structure ('concurrent', 'full' or None)")
+    parser.add_argument("--choice_K", dest="choice_K", choices=["none", "threshold", "elbow", "threshold-elbow", "elbow-mcp"],
+                        help="Strategy to choose K", default="none")
     parser.add_argument("--calib_window", dest="calibration_window", type=int, help="Calibration window in days", default=364)
     parser.add_argument("--start_date", dest="test_start_date", type=int, help="Test start date in YYYYMMDD format", default=20240101)
     parser.add_argument("--end_date", dest="test_end_date", type=int, help="Test end date in YYYYMMDD format", default=20241231)
@@ -162,6 +171,12 @@ if __name__ == "__main__":
 
     if args.var_structure == "none":
         args.var_structure = None
+
+    if args.choice_K == "none":
+        args.choice_K = None
+    else:
+        args.K_supply = None
+        args.K_demand = None
 
     args.test_start_date = pd.to_datetime(str(args.test_start_date), format='%Y%m%d').date()
     args.test_end_date = pd.to_datetime(str(args.test_end_date), format='%Y%m%d').date()
@@ -173,6 +188,7 @@ if __name__ == "__main__":
         args.save_folder,
         args.K_supply,
         args.K_demand,
+        args.choice_K,
         args.transformer,
         args.ar_structure,
         args.var_structure,
