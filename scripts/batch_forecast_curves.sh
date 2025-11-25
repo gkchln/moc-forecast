@@ -27,11 +27,11 @@ source ~/Projects/.venvs/moc_forecast/bin/activate
 # ---------------------------
 # Define static parameters
 # ---------------------------
-export START_DATE=20241225
+export START_DATE=20240101
 export END_DATE=20241231
 export ENDOG_PATH=data/processed/sdts.pkl
 export EXOG_PATH=data/source/predictors.pkl
-export SAVE_FOLDER=data/output/test
+export SAVE_FOLDER=data/output/
 
 # ---------------------------
 # Define parameter arrays
@@ -41,9 +41,10 @@ export SAVE_FOLDER=data/output/test
 # AR_STRUCTURE=("concurrent" "full")
 # VAR_STRUCTURE=("none" "concurrent")
 # TRANSFORMER=("fpca" "zst")
-K_SUPPLY=(13)
-K_DEMAND=(3 4)
-AR_STRUCTURE=("concurrent")
+K_SUPPLY=(0)
+K_DEMAND=(0)
+CHOICE_K=("threshold-elbow" "threshold" "elbow")
+AR_STRUCTURE=("concurrent" "full")
 VAR_STRUCTURE=("none" "concurrent")
 TRANSFORMER=("fpca")
 
@@ -52,7 +53,7 @@ TRANSFORMER=("fpca")
 # ---------------------------
 run_one() {
     line="$1"
-    read -r Ks Kd ar var trans <<< "$line"
+    read -r Ks Kd chK ar var trans <<< "$line"
 
     python -m scripts.forecast_curves \
         --endog_path "$ENDOG_PATH" \
@@ -62,6 +63,7 @@ run_one() {
         --end_date "$END_DATE" \
         --K_supply "$Ks" \
         --K_demand "$Kd" \
+        --choice_K "$chK" \
         --transformer "$trans" \
         --ar_structure "$ar" \
         --var_structure "$var"
@@ -75,10 +77,12 @@ export -f run_one
 gen_combinations() {
     for Ks in "${K_SUPPLY[@]}"; do
         for Kd in "${K_DEMAND[@]}"; do
-            for ar in "${AR_STRUCTURE[@]}"; do
-                for var in "${VAR_STRUCTURE[@]}"; do
-                    for trans in "${TRANSFORMER[@]}"; do
-                        echo "$Ks $Kd $ar $var $trans"
+            for chK in "${CHOICE_K[@]}"; do
+                for ar in "${AR_STRUCTURE[@]}"; do
+                    for var in "${VAR_STRUCTURE[@]}"; do
+                        for trans in "${TRANSFORMER[@]}"; do
+                            echo "$Ks $Kd $chK $ar $var $trans"
+                        done
                     done
                 done
             done
