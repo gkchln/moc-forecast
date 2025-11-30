@@ -227,3 +227,23 @@ def get_inverse_function(x_values, y_values):
     """
     assert is_strictly_monotonic(y_values)
     return interp1d(y_values, x_values, bounds_error=False, fill_value="extrapolate")
+
+
+def get_daily_df_from_hourly_series(s: pd.Series):
+    """
+    Converts a pandas Series with a DateTimeIndex at hourly frequency into a DataFrame
+    where each row represents a day and each column represents an hour of the day.
+
+    Args:
+        s (pd.Series): A pandas Series with a DateTimeIndex at hourly frequency.
+
+    Returns:
+        pd.DataFrame: A DataFrame with dates as rows and hours (0-23) as columns, containing the values from the original series.
+    """
+    df = s.reset_index()
+    df['date'] = df['index'].dt.date
+    df['hour'] = df['index'].dt.hour
+    df = df.pivot(index='date', columns='hour', values=s.name)
+    df.columns.name = None
+    df.index.name = None
+    return df
