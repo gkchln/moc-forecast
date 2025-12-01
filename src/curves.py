@@ -503,7 +503,7 @@ class SupplyDemandTimeSeries:
 
 
         
-    def sample(self, n=None, frac=None, random_state=None, replace=False):
+    def sample(self, n=None, frac=None, random_state=None, replace=False, sort=True) -> "SupplyDemandTimeSeries":
         """
         Return a random subsample of the SupplyDemandTimeSeries.
 
@@ -526,8 +526,11 @@ class SupplyDemandTimeSeries:
             n = int(np.ceil(frac * total))
 
         indices = rng.choice(total, size=n, replace=replace)
-        sorted_indices = sorted(indices)
-        return self[sorted_indices]
+        
+        if sort:
+            indices = sorted(indices)
+
+        return self[indices]
     
     
     def plot(self, fig=None, figsize=None, color=None, legend=False, **kwargs):
