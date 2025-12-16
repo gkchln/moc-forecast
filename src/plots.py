@@ -3,14 +3,51 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 import numpy as np
+import itertools
+import math
+from typing import Dict, Tuple, Any, Union
+from scipy.stats import pearsonr, spearmanr
+from statsmodels.nonparametric.smoothers_lowess import lowess
 from skfda.representation import FDataGrid
 from skfda.exploratory.visualization import FPCAPlot
 from skfda.preprocessing.dim_reduction import FPCA
 from skfda.misc.scoring import r2_score
-from .curves import SupplyDemandFPCA, SupplyDemandTimeSeries
-from .evaluation import DM_test_functional, DM_test_scalar
 
-from typing import Dict, Tuple, Any
+from .curves import SupplyDemandFPCA, SupplyDemandTimeSeries
+from .evaluation import *
+
+colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+
+
+def color_map(val, min_val, max_val, invert=False, decimals=3):
+    """
+    Returns a LaTeX cell color interpolated between custom red-yellow-green
+    colormap based on the value of val between min_val and max_val.
+    The colormap is defined as:
+       low: (218, 134, 118)
+       middle: (248, 215, 120)
+       high: (113, 185, 142)
+    If invert=True, the gradient is flipped.
+    decimals: number of decimal places to display in the cell
+    """
+    norm = (val - min_val) / (max_val - min_val)
+    if invert:
+        norm = 1 - norm  # invert the colormap direction
+
+    if norm < 0.5:
+        # interpolate low -> middle
+        t = norm / 0.5
+        r = int(218 + t * (248 - 218))
+        g = int(134 + t * (215 - 134))
+        b = int(118 + t * (120 - 118))
+    else:
+        # interpolate middle -> high
+        t = (norm - 0.5) / 0.5
+        r = int(248 + t * (113 - 248))
+        g = int(215 + t * (185 - 215))
+        b = int(120 + t * (142 - 120))
+
+    return f"\\cellcolor[RGB]{{{r},{g},{b}}}{val:.{decimals}f}"
 
 
 # -------------------------
@@ -80,10 +117,10 @@ def plot_fpcs_effect(
     # plt.savefig('../plots/eem25/fpcs_off.png', dpi=300)
 
 
+
 # -------------------------
 # Curves plots
 # -------------------------
-
 
 def plot_r2_score(
         curves_pred: Dict[str, SupplyDemandTimeSeries],
@@ -91,7 +128,9 @@ def plot_r2_score(
         models_order: list[str] | None = None,
         models_style: Dict[str, Dict[str, Any]] = None,
         figsize: Tuple[int, int] = (8, 3),
-        nrows: int = 1
+        nrows_legend: int = 1,
+        savefig: bool = False,
+        path: str | None = None
     ):
     fig, axes = plt.subplots(1, 2, figsize=figsize, sharey=True, sharex=True)
 
@@ -119,7 +158,298 @@ def plot_r2_score(
     axes[0].grid(True, linestyle='--', alpha=0.5)
     axes[1].grid(True, linestyle='--', alpha=0.5)
     fig.legend(labels=models, loc='upper center', bbox_to_anchor=(0.5, 1.2),
-               ncol=len(models) / nrows, frameon=False)
+               ncol=len(models) / nrows_legend, frameon=False)
+    if savefig:
+        plt.savefig(path, dpi=300, bbox_inches="tight")
+
+    return fig
+
+
+def plot_curves_price_prediction(
+        curves_true: SupplyDemandTimeSeries,
+        curves_pred: SupplyDemandTimeSeries,
+        timestamp=None,
+        figsize=(4, 3),
+        axis_fontsize=12,
+        text_fontsize=12,
+        path=None,
+        savefig=False
+    ):
+    fig, ax = plt.subplots(figsize=figsize)
+    if not timestamp:
+        timestamp = np.random.choice(curves_true.timestamps)
+    true_obs = curves_true[[timestamp]]
+    pred_obs = curves_pred[[timestamp]]
+    true_obs.plot(fig=fig, color=colors[0])
+    pred_obs.plot(fig=fig, color=colors[1], linestyle='dashed')
+    price_true = true_obs.get_clearing_prices(verbose=False).iloc[0]
+    price_pred = pred_obs.get_clearing_prices(verbose=False).iloc[0]
+
+
+    plt.scatter(price_true, true_obs.supply(price_true)[0, 0, 0], s=30)
+    plt.scatter(price_pred, pred_obs.supply(price_pred)[0, 0, 0], s=30)
+
+    plt.ylabel('Quantity [GW]', fontsize=axis_fontsize)
+    plt.xticks(fontsize=axis_fontsize)
+    plt.xlabel('Price [€/MWh]', fontsize=axis_fontsize)
+    plt.yticks(fontsize=axis_fontsize)
+    plt.ylim(top=70)
+
+    plt.title(timestamp, fontsize=text_fontsize)
+    plt.text(0.8, 0.93, f'Actual: {price_true:.0f} €/MWh', ha='right', va='center',
+             transform=plt.gca().transAxes, fontsize=text_fontsize, color=colors[0], weight='semibold')
+    plt.text(0.8, 0.84, f'Predicted: {price_pred:.0f} €/MWh', ha='right', va='center',
+             transform=plt.gca().transAxes, fontsize=text_fontsize, color=colors[1], weight='semibold')
+
+    if savefig:
+        plt.savefig(path, dpi=300, bbox_inches='tight')
+
+    plt.show()
+    plt.close(fig)
+
+
+
+# -------------------------
+# Prices plots
+# -------------------------
+
+def plot_hourly_avg_error(
+        prices_true: pd.Series,
+        prices_pred: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
+        forecast_type: str,
+        models_order: list[str],
+        savefig=False,
+        path=None,
+        figsize=(8, 4)
+    ):
+    hourly_avg_errors = pd.DataFrame(index=range(24), columns=models_order)
+
+    if forecast_type == 'quantiles':
+        # For quantile forecasts we compute the CRPS
+        for model in models_order:
+            hourly_avg_errors[model] = prices_pred[model].groupby(prices_pred[model].index.hour).apply(
+                lambda x: crps(prices_true.loc[x.index], x)
+            )
+    else:
+        # For point forecasts we compute the MAE
+        for model in models_order:
+            abs_errors = prices_pred[model] - prices_true
+            hourly_avg_errors[model] = abs_errors.groupby(abs_errors.index.hour).apply(
+                lambda x: x.abs().mean()
+            )
+
+    # Marker and linestyle cycles
+    marker_list = ['o', 's', '^', 'D', 'v', '<', '>', 'P', 'X']
+    linestyle_list = ['-', '--', ':', '-.']
+
+    markers = itertools.cycle(marker_list)
+    linestyles = itertools.cycle(linestyle_list)
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    for model in models_order:
+        ax.plot(
+            hourly_avg_errors.index,
+            hourly_avg_errors[model],
+            label=model,
+            marker=next(markers),
+            linestyle=next(linestyles),
+            linewidth=1
+        )
+
+    ax.set_xlabel('Hour of the day')
+    if forecast_type == 'quantiles':
+        ax.set_ylabel('Avg. CRPS')
+    else:
+        ax.set_ylabel('MAE [€/MWh]')
+    ax.legend()
+    ax.grid(True, linestyle='--', alpha=0.5)
+
+    if savefig and path is not None:
+        plt.savefig(path, dpi=300, bbox_inches="tight")
+
+    plt.show()
+
+    return hourly_avg_errors
+
+
+def plot_price_scatter(prices_true, prices_pred, models, savefig=False, path=None, figsize=(16, 4), nrows=1):
+    min_val = min(prices_true.min(), prices_pred['FPCA-VARX'].min())
+    max_val = max(prices_true.max(), prices_pred['FPCA-VARX'].max())
+    ncols = len(models) // nrows
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize, sharex=True, sharey=True, squeeze=False)
+
+    for k, model in enumerate(models):
+        i = k // ncols
+        j = k % ncols
+        axes[i, j].scatter(prices_true, prices_pred[model], alpha=0.5, s=10, label=model)
+        axes[i, j].grid(True, linestyle='--', alpha=0.5)
+        axes[i, j].plot([min_val, max_val], [min_val, max_val], color='red', linestyle='--', linewidth=1, label=None)
+        axes[i, j].set_aspect('equal', adjustable='box')
+        axes[i, j].set_title(model)
+        if j == 0:
+            axes[i, j].set_ylabel('Predicted Prices [€/MWh]')
+        if i == nrows - 1:
+            axes[i, j].set_xlabel('True Prices [€/MWh]')
+
+    if savefig and path is not None:
+        plt.savefig(path, dpi=300, bbox_inches="tight")
+
+
+
+def plot_pit_histograms(
+        observations: np.ndarray,
+        samples: np.ndarray,
+        model_names: list,
+        nrows: int = 3,
+        figsize: tuple = (12, 10),
+        bins: int = 10,
+        savefig: bool = False,
+        path: str | None = None
+    ):
+    """
+    Plot PIT histograms for multiple models.
+
+    Args:
+        observations (np.ndarray): shape (n, p), observed values per model.
+        samples (np.ndarray): shape (n, p, N), empirical samples per observation.
+        model_names (list): list of model names (length p).
+        nrows (int): number of rows in the subplot grid.
+        figsize (tuple): figure size.
+        bins (int): number of bins for PIT histograms.
+        annotate (bool): if True, annotate each subplot with mean and variance of PIT.
+    """
+    n_models = len(model_names)
+    ncols = math.ceil(n_models / nrows)
+    
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize, sharex=True, sharey=True)
+    axes = axes.flatten()
+    
+    # Compute PIT values for all models
+    pits = pit_empirical(observations, samples)  # shape (n, p)
+    
+    for k, model in enumerate(model_names):
+        ax = axes[k]
+        pit_vals = pits[:, k]
+        
+        # Histogram
+        ax.hist(pit_vals, bins=bins, range=(0, 1), density=True)
+        
+        # Reference line for uniform distribution
+        ax.axhline(1, color='red', linestyle='--', linewidth=1)
+        ax.grid(True, linestyle='--', alpha=0.5)
+        
+        ax.set_title(model)
+        ax.set_xlim(0, 1)
+        # ax.set_ylim(0, max(1.1, ax.get_ylim()[1]))  # leave room above uniform line
+        
+        if k % ncols == 0:
+            ax.set_ylabel("Density")
+        if k // ncols == nrows - 1:
+            ax.set_xlabel("PIT")
+    
+    # Hide unused axes
+    for ax in axes[n_models:]:
+        ax.axis('off')
+    
+    fig.tight_layout()
+    if savefig:
+        plt.savefig(path, dpi=300, bbox_inches='tight')
+
+    return fig
+
+
+def plot_width_error_correlation(widths, errors, annotate=False, trend='linear', corr_method='pearson', nrows=3,
+                                 figsize=(10, 10), lowess_frac=0.3, savefig=False, path=None, **kwargs):
+    """
+    Scatter plot of widths vs errors for multiple models with trend line.
+
+    Args:
+        widths (pd.DataFrame): Columns correspond to models; rows to observations.
+        errors (pd.DataFrame): Same shape as widths.
+        annotate (bool): Whether to show correlation annotation on each subplot.
+        trend (str): Type of trend line ('linear', 'lowess', or None).
+        corr_method (str): Correlation method ('pearson' or 'spearman').
+        nrows (int): Number of rows in the subplot grid.
+        figsize (tuple): Figure size.
+        lowess_frac (float): Fraction of data used for LOWESS smoothing (0 < lowess_frac <= 1).
+        savefig (bool): Whether to save the figure.
+        path (str): Path to save the figure.
+        **kwargs: Additional arguments passed to ax.scatter().
+
+    Returns:
+        matplotlib.figure.Figure: The generated figure.
+    """
+    n_models = widths.shape[1]
+    ncols = math.ceil(n_models / nrows)
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize, sharex=True, sharey=True, squeeze=False)
+
+    for k, model in enumerate(widths.columns):
+        row = k // ncols
+        col = k % ncols
+        ax = axes[row, col]
+
+        x = widths[model].values
+        y = errors[model].values
+
+        # Scatter points
+        ax.scatter(x, y, alpha=0.5, s=10, **kwargs)
+
+        # ---- Trend line selection ----
+        if len(x) > 1 and trend is not None:
+
+            if trend.lower() == "lowess":
+                smoothed = lowess(y, x, frac=lowess_frac, return_sorted=True)
+                x_smooth = smoothed[:, 0]
+                y_smooth = smoothed[:, 1]
+                ax.plot(x_smooth, y_smooth, color='red', linewidth=2)
+
+            elif trend.lower() == "linear":
+                slope, intercept = np.polyfit(x, y, 1)
+                x_line = np.linspace(np.min(x), np.max(x), 200)
+                y_line = slope * x_line + intercept
+                ax.plot(x_line, y_line, color='red', linewidth=2)
+
+            else:
+                raise ValueError("trend must be 'lowess', 'linear', or None")
+        # --------------------------------
+
+        # ---- Correlation annotation ----
+        if annotate and corr_method is not None:
+            method = corr_method.lower()
+
+            if method == "pearson":
+                corr, pval = pearsonr(x, y)
+            elif method == "spearman":
+                corr, pval = spearmanr(x, y)
+            else:
+                raise ValueError("corr_method must be 'pearson', 'spearman', or None")
+
+            ax.text(0.05, 0.95, f"$r = {corr:.2f}$",
+                    transform=ax.transAxes, fontsize=12,
+                    va="top", ha="left")
+        # --------------------------------
+
+        ax.grid(True, linestyle='--', alpha=0.5)
+        ax.set_title(model)
+
+        if row == nrows - 1:
+            ax.set_xlabel("90% PI width", fontsize=10)
+        if col == 0:
+            ax.set_ylabel("Absolute Errors [€/MWh]", fontsize=10)
+
+    # Hide any unused axes if the grid is larger than the number of models
+    for idx in range(n_models, nrows * ncols):
+        row = idx // ncols
+        col = idx % ncols
+        axes[row, col].axis('off')
+
+    fig.tight_layout()
+
+    if savefig and path is not None:
+        plt.savefig(path, dpi=300, bbox_inches='tight')
+
     return fig
 
 
@@ -128,9 +458,31 @@ def plot_r2_score(
 # DM tests chessboard plots
 # -------------------------
 
+def _type_checks_and_get_models(
+        true: FDataGrid | pd.Series,
+        forecasts: Union[Dict[str, FDataGrid], Dict[str, pd.DataFrame], pd.DataFrame],
+        scope: str,
+        models_order=None
+    ):
+    # Initial checks
+    if scope == 'functional' and not isinstance(true, FDataGrid):
+        raise ValueError("When scope is 'functional', true must be of type FDataGrid.")
+    if scope in ['quantiles', 'scalar'] and not isinstance(true, pd.Series):
+        raise ValueError("When scope is 'quantiles' or 'scalar', true must be of type pandas.Series.")
+    if scope not in ['functional', 'quantiles', 'scalar']:
+        raise ValueError("scope must be either 'functional', 'quantiles' or 'scalar'.")
+    # Computing the multivariate DM test for each forecast pair
+    if models_order:
+        models = models_order
+    else:
+        models = forecasts.keys() if isinstance(forecasts, dict) else forecasts.columns
+
+    return models
+
 def plot_day_level_dm_test(
         true: FDataGrid | pd.Series,
-        forecasts: Dict[str, FDataGrid] | pd.DataFrame,
+        forecasts: Union[Dict[str, FDataGrid], Dict[str, pd.DataFrame], pd.DataFrame],
+        scope: str,
         models_order=None,
         title=None,
         savefig=False,
@@ -153,6 +505,8 @@ def plot_day_level_dm_test(
             Dictionary that contains the forecasts of different models. The dictionary keys are the 
             forecast/model names. The number of forecasts should equal the number of datapoints
             in ``true``.
+        scope (str):
+            scope of the DM test to be performed. It can be either 'functional', 'quantiles' or 'scalar'.
         models_order (list, optional):
             List that indicates the order in which the models should be displayed in the plot. Defaults to None.
         title (str, optional):
@@ -162,13 +516,9 @@ def plot_day_level_dm_test(
         path (str, optional):
             Path to save the figure. Only necessary when `savefig=True`.
     """
-    # Computing the multivariate DM test for each forecast pair
-    if models_order:
-        models = models_order
-    else:
-        models = forecasts.keys() if isinstance(forecasts, dict) else forecasts.columns
-    
-    p_values = pd.DataFrame(index=models, columns=models) 
+    models = _type_checks_and_get_models(true, forecasts, scope, models_order)
+
+    p_values = pd.DataFrame(index=models, columns=models)
 
     for model1 in models:
         for model2 in models:
@@ -177,9 +527,12 @@ def plot_day_level_dm_test(
             if model1 == model2:
                 p_values.loc[model1, model2] = 1
             else:
-                if isinstance(true, FDataGrid):
+                if scope == 'functional':
                     p_values.loc[model1, model2] = DM_test_functional(true, forecasts[model1], forecasts[model2],
                                                                       per_hour=False, return_errors=False, two_sided=False)
+                elif scope == 'quantiles':
+                    p_values.loc[model1, model2] = DM_test_quantiles(true, forecasts[model1], forecasts[model2],
+                                                                  per_hour=False, return_errors=False, two_sided=False)
                 else:
                     p_values.loc[model1, model2] = DM_test_scalar(true, forecasts[model1], forecasts[model2],
                                                                   per_hour=False, return_errors=False, two_sided=False)
@@ -214,6 +567,7 @@ def plot_day_level_dm_test(
 def plot_hour_level_dm_test(
         true: FDataGrid | pd.Series,
         forecasts: Dict[str, FDataGrid] | pd.DataFrame,
+        scope: str,
         alpha=0.05,
         models_order=None,
         colormap='coolwarm',
@@ -238,6 +592,8 @@ def plot_hour_level_dm_test(
             Dictionary that contains the forecasts of different models. The dictionary keys are the 
             forecast/model names. The number of forecasts should equal the number of datapoints
             in ``true``.
+        scope (str):
+            scope of the DM test to be performed. It can be either 'functional', 'quantiles' or 'scalar'.
         alpha (float, optional):
             Significance level to consider a forecast significantly more accurate than another. Defaults to 0.05.
         models_order (list, optional):
@@ -251,14 +607,7 @@ def plot_hour_level_dm_test(
         path (str, optional):
             Path to save the figure. Only necessary when `savefig=True`
     """
-    # Computing the multivariate DM test for each forecast pair
-    if models_order:
-        models = models_order
-    else:
-        if isinstance(forecasts, dict):
-            models = forecasts.keys()
-        else:
-            models = forecasts.columns
+    models = _type_checks_and_get_models(true, forecasts, scope, models_order)
     
     n_signif_hours = pd.DataFrame(index=models, columns=models) 
 
@@ -269,8 +618,10 @@ def plot_hour_level_dm_test(
             if model1 == model2:
                 n_signif_hours.loc[model1, model2] = 0
             else:
-                if isinstance(true, FDataGrid):
+                if scope == 'functional':
                     p_values = DM_test_functional(true, forecasts[model1], forecasts[model2], per_hour=True)
+                elif scope == 'quantiles':
+                    p_values = DM_test_quantiles(true, forecasts[model1], forecasts[model2], per_hour=True)
                 else:
                     p_values = DM_test_scalar(true, forecasts[model1], forecasts[model2], per_hour=True)
                     
