@@ -4,6 +4,7 @@ import copy
 import datetime
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+import itertools
 import numpy as np
 import pandas as pd
 import pickle
@@ -69,7 +70,12 @@ def _incremental_inverse(fpca: FPCA, scores: np.ndarray):
     return recons
 
 
+#####################
 ###### Classes ######
+#####################
+
+
+### Curves transformations ###
 
 class ZielSteinertTransformer:
     """Transformer for discretizing and reconstructing electricity supply or demand curves
@@ -79,26 +85,26 @@ class ZielSteinertTransformer:
     into discrete class-based representations and reconstructs them back.
 
     Attributes:
-        type (str): Indicates whether the transformer handles 'supply' or 'demand' curves.
+        side (str): Indicates whether the transformer handles 'supply' or 'demand' curves.
         n_classes (int): Number of discretized quantity classes.
-        price_grid (np.ndarray): Price grid extracted from the input curves after fitting.
-        mean_curve (FDataGrid): Mean cumulative curve computed during fitting.
-        Q_grid (np.ndarray): Equidistant quantity grid used to build class boundaries.
-        class_bounds (np.ndarray): Price boundaries corresponding to quantity classes.
+        price_grid_ (np.ndarray): Price grid extracted from the input curves after fitting.
+        mean_curve_ (FDataGrid): Mean cumulative curve computed during fitting.
+        Q_grid_ (np.ndarray): Equidistant quantity grid used to build class boundaries.
+        class_bounds_ (np.ndarray): Price boundaries corresponding to quantity classes.
     """
-    def __init__(self, curve_type: str, n_classes: int):
+    def __init__(self, side: str, n_classes: int):
         """Initializes the transformer.
 
         Args:
-            type (str): Either 'supply' or 'demand'.
+            side (str): Either 'supply' or 'demand'.
             n_classes (int): Number of discretized quantity classes.
 
         Raises:
             ValueError: If `type` is not 'supply' or 'demand'.
         """
-        if curve_type not in ['supply', 'demand']:
-            raise ValueError(f"curve_type argument must be 'supply' or 'demand'. Got: {curve_type}")
-        self.curve_type = curve_type
+        if side not in ['supply', 'demand']:
+            raise ValueError(f"curve_type argument must be 'supply' or 'demand'. Got: {side}")
+        self.side = side
         self.n_classes = n_classes
 
     
@@ -113,7 +119,7 @@ class ZielSteinertTransformer:
         """
         Qmin = mean_curve.data_matrix[0, 0, 0]
         Qmax = mean_curve.data_matrix[0, -1, 0]
-        if self.curve_type == 'demand':
+        if self.side == 'demand':
             Qmin, Qmax = Qmax, Qmin
         Q_grid = np.linspace(Qmin, Qmax, self.n_classes)
         return Q_grid
@@ -132,7 +138,7 @@ class ZielSteinertTransformer:
         inverse_mean = get_inverse_function(x_values, y_values)
         class_bounds = inverse_mean(Q_grid)
         # HOTFIX for ensuring the extreme class bounds correspond to the extremes of price_grid
-        if self.curve_type == 'demand':
+        if self.side == 'demand':
             class_bounds[0] = x_values[-1]
             class_bounds[-1] = x_values[0]
         else:
@@ -171,7 +177,7 @@ class ZielSteinertTransformer:
         Returns:
             np.ndarray: Array of class indices corresponding to each price in `price_grid`.
         """
-        right = self.curve_type != "demand"
+        right = self.side != "demand"
         return np.digitize(price_grid, class_bounds, right=right)
     
     
@@ -190,7 +196,7 @@ class ZielSteinertTransformer:
         price_grid = mean_curve.grid_points[0]
         mean_cum_qty = mean_curve.data_matrix.squeeze()
         mean_qty = mean_cum_qty.copy()
-        if self.curve_type == 'demand':
+        if self.side == 'demand':
             # Since the cumulative demand quantity is built from right to left,
             # things happen in the reverse order
             mean_qty[:-1] = -np.diff(mean_cum_qty)
@@ -213,10 +219,10 @@ class ZielSteinertTransformer:
         Returns:
             ZielSteinertTransformer: fitted transformer
         """
-        self.price_grid = curves.grid_points[0]
-        self.mean_curve = curves.mean()
-        self.Q_grid = self._get_qty_grid(self.mean_curve)
-        self.class_bounds = self._get_class_bounds(self.mean_curve, self.Q_grid)
+        self.price_grid_ = curves.grid_points[0]
+        self.mean_curve_ = curves.mean()
+        self.Q_grid_ = self._get_qty_grid(self.mean_curve_)
+        self.class_bounds_ = self._get_class_bounds(self.mean_curve_, self.Q_grid_)
         return self
     
     
@@ -230,7 +236,7 @@ class ZielSteinertTransformer:
             np.ndarray: class quantity values for each curve. Rows correspond to different curves
             while columns to the different classes
         """
-        return self._get_class_qty(curves, self.class_bounds)
+        return self._get_class_qty(curves, self.class_bounds_)
     
     
     def fit_transform(self, curves: FDataGrid) -> pd.DataFrame:
@@ -255,11 +261,11 @@ class ZielSteinertTransformer:
         Returns:
             FDataGrid: reconstructed curves
         """
-        weights = self._get_price_weights_per_class(self.mean_curve, self.Q_grid, self.class_bounds)
-        tot_class_qty = class_qty[:, self._get_class_membership(self.price_grid,
-                                                                           self.class_bounds)]
+        weights = self._get_price_weights_per_class(self.mean_curve_, self.Q_grid_, self.class_bounds_)
+        tot_class_qty = class_qty[:, self._get_class_membership(self.price_grid_,
+                                                                           self.class_bounds_)]
         recons_qty = weights[np.newaxis, :] * tot_class_qty
-        if self.curve_type == 'demand':
+        if self.side == 'demand':
             # Same as above
             recons_cum_qty = recons_qty[:, ::-1].cumsum(axis=1)[:, ::-1]
         else:
@@ -267,7 +273,7 @@ class ZielSteinertTransformer:
 
         return FDataGrid(
             data_matrix=recons_cum_qty,
-            grid_points=self.price_grid
+            grid_points=self.price_grid_
         )
     
 
@@ -385,11 +391,13 @@ class SupplyDemandZST(SupplyDemandTransformer):
         self.demand_features_names = [f'Q{i}b' for i in range(1, self.K_demand + 1)]
 
     def fit(self, sd: "SupplyDemandTimeSeries"):
-        self.transformer_supply_ = ZielSteinertTransformer(curve_type='supply', n_classes=self.K_supply).fit(sd.supply)
-        self.transformer_demand_ = ZielSteinertTransformer(curve_type='demand', n_classes=self.K_demand).fit(sd.demand)
+        self.transformer_supply_ = ZielSteinertTransformer(side='supply', n_classes=self.K_supply).fit(sd.supply)
+        self.transformer_demand_ = ZielSteinertTransformer(side='demand', n_classes=self.K_demand).fit(sd.demand)
         return self
 
 
+
+### Time series of Supply-Demand curves pairs ###
 
 class SupplyDemandTimeSeries:
     def __init__(self, supply: FDataGrid, demand: FDataGrid):
@@ -533,7 +541,8 @@ class SupplyDemandTimeSeries:
         return self[indices]
     
     
-    def plot(self, fig=None, figsize=None, color=None, legend=False, **kwargs):
+    def plot(self, fig=None, figsize=None, color=None, labels='timestamps', custom_label=None, legend=False,
+             linestyle='-', **kwargs):
         """
         Plot the supply and demand curves for each timestamp using the same color for each pair.
 
@@ -541,6 +550,9 @@ class SupplyDemandTimeSeries:
             ax (matplotlib.axes.Axes, optional): The axes to plot on. If None, creates a new figure and axes.
             figsize (tuple, optional): Size of the figure.
             color (str or list, optional): Single color or list of colors for each curve pair.
+            labels (str, optional): 'timestamps' to label curves with timestamps, 'custom' to use custom_label, or None for no labels.
+            custom_label (str, optional): Custom label to use if labels='custom'.
+            legend (bool, optional): Whether to display the legend.
             **kwargs: Additional keyword arguments passed to the FDataGrid.plot() method.
 
         Returns:
@@ -559,10 +571,24 @@ class SupplyDemandTimeSeries:
         else:
             color_cycle = color
 
+        if labels == 'timestamps':
+            label_name = self.timestamps
+        elif labels == 'custom':
+            label_name = [custom_label for i in range(len(self))]
+        else:
+            label_name = [None for i in range(len(self))]
+
+        linestyle_list = ['-', '--', ':', '-.']
+        linestyles = itertools.cycle(linestyle_list)
+
         for i in range(len(self)):
             c = color_cycle[i % len(color_cycle)]
-            fig = self.supply[i:i+1].plot(fig=fig, color=c, label=self.timestamps[i], **kwargs)
-            fig = self.demand[i:i+1].plot(fig=fig, color=c, label=None, **kwargs)
+            if not linestyle:
+                ls = next(linestyles)
+            else:
+                ls = linestyle
+            fig = self.supply[i:i+1].plot(fig=fig, color=c, label=label_name[i], linestyle=ls, **kwargs)
+            fig = self.demand[i:i+1].plot(fig=fig, color=c, label=None, linestyle=ls, **kwargs)
 
         ax.set_ylabel('Quantity [GWh]')
         ax.set_xlabel('Price [€/MWh]')
