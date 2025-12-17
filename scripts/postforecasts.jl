@@ -1,20 +1,65 @@
+using ArgParse
 using PostForecasts
 using Statistics
 using ProgressBars
 using HDF5
 import PostForecasts.saveforecasts
 
-# Paths
-input_folder = joinpath("data", "processed", "postforecasts", "fARX")
-output_folder = joinpath("data", "output", "postforecasts", "fARX")
-mkpath(output_folder)
+function parse_commandline()
+    s = ArgParseSettings()
 
-# PostForecasts parameters
-calibration_windows = [28, 56, 91, 182] # days
-methods = [:zeronormal, :normal, :hs, :qr, :cp, :idr]
-start = 20240701
-stop = 20241231
-quantiles = 99
+    @add_arg_table s begin
+        "--input_folder"
+            help = "Input folder path"
+            arg_type = String
+            required = true
+
+        "--output_folder"
+            help = "Output folder path"
+            arg_type = String
+            required = true
+
+        "--calibration_windows"
+            help = "Comma-separated list of calibration windows (days)"
+            arg_type = String
+            required = true
+
+        "--methods"
+            help = "Comma-separated list of methods"
+            arg_type = String
+            required = true
+
+        "--start"
+            help = "Start date (YYYYMMDD)"
+            arg_type = Int
+            required = true
+
+        "--stop"
+            help = "Stop date (YYYYMMDD)"
+            arg_type = Int
+            required = true
+
+        "--quantiles"
+            help = "Number of quantiles"
+            arg_type = Int
+            default = 99
+    end
+
+    return parse_args(s)
+end
+
+args = parse_commandline()
+
+# Convert arguments
+input_folder = args["input_folder"]
+output_folder = args["output_folder"]
+
+calibration_windows = parse.(Int, split(args["calibration_windows"], ","))
+methods = Symbol.(split(args["methods"], ","))
+
+start = args["start"]
+stop = args["stop"]
+quantiles = args["quantiles"]
 
 qf = Dict(m => Vector{QuantForecasts}(undef, 24) for m in methods)
 
