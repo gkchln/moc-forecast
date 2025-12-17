@@ -5,8 +5,8 @@ test_start = '2024-01-01 00:00:00'
 test_end = '2024-12-31 23:00:00'
 
 prices_true_path = os.path.join('data', 'source', 'mgp_nat_price.csv')
-prices_pred_path = os.path.join('data', 'output', 'price-based', 'prices', 'full_none_1237_conc_none_017_none_364_aic_20240101_20241231.csv')
-output_folder = os.path.join('data', 'processed', 'postforecasts', 'fARX')
+prices_pred_path = os.path.join('data', 'output', 'price-based', 'point', 'prices', 'full_none_1237_conc_none_017_none_364_aic_20240101_20241231.csv')
+output_folder = os.path.join('data', 'processed', 'postforecasts', 'fARX', "_input")
 
 os.makedirs(output_folder, exist_ok=True)
 
