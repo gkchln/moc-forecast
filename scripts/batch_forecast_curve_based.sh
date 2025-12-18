@@ -30,7 +30,7 @@ source ~/Projects/.venvs/moc_forecast/bin/activate
 export START_DATE=20240101
 export END_DATE=20241231
 export ENDOG_PATH=data/processed/sdts.pkl
-export EXOG_PATH=data/source/predictors.pkl
+export EXOG_PATH=data/source/exog.csv
 export SAVE_FOLDER=data/output/
 
 # ---------------------------
@@ -44,8 +44,8 @@ export SAVE_FOLDER=data/output/
 K_SUPPLY=(0)
 K_DEMAND=(0)
 CHOICE_K=("threshold-elbow" "threshold" "elbow")
-AR_STRUCTURE=("concurrent" "full")
-VAR_STRUCTURE=("none" "concurrent")
+AUTOCORR_STRUCTURE=("concurrent" "full")
+CROSSCORR_STRUCTURE=("none" "concurrent")
 TRANSFORMER=("fpca")
 
 # ---------------------------
@@ -53,7 +53,7 @@ TRANSFORMER=("fpca")
 # ---------------------------
 run_one() {
     line="$1"
-    read -r Ks Kd chK ar var trans <<< "$line"
+    read -r Ks Kd chK ac cc trans <<< "$line"
 
     python -m scripts.forecast_curves \
         --endog_path "$ENDOG_PATH" \
@@ -65,8 +65,8 @@ run_one() {
         --K_demand "$Kd" \
         --choice_K "$chK" \
         --transformer "$trans" \
-        --ar_structure "$ar" \
-        --var_structure "$var"
+        --autocorr_structure "$ac" \
+        --crosscorr_structure "$cc"
 }
 
 export -f run_one
@@ -78,10 +78,10 @@ gen_combinations() {
     for Ks in "${K_SUPPLY[@]}"; do
         for Kd in "${K_DEMAND[@]}"; do
             for chK in "${CHOICE_K[@]}"; do
-                for ar in "${AR_STRUCTURE[@]}"; do
-                    for var in "${VAR_STRUCTURE[@]}"; do
+                for ac in "${AUTOCORR_STRUCTURE[@]}"; do
+                    for cc in "${CROSSCORR_STRUCTURE[@]}"; do
                         for trans in "${TRANSFORMER[@]}"; do
-                            echo "$Ks $Kd $chK $ar $var $trans"
+                            echo "$Ks $Kd $chK $ac $cc $trans"
                         done
                     done
                 done
