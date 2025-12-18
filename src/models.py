@@ -1,6 +1,6 @@
 """
 File containing models:
-    1. Class applying VARX model with Lasso regularization for each hour (LassoVARX)
+    1. Class applying VARX model with Lasso regularization for each hour with concurrent or full structure (LassoVARX)
     2. Wrappers of pmdarima's auto_arima for applying SARIMAX with automatic order search
         to each hour and each component of a multivariate hourly time series HourlyAutoARIMA and MultiHourlyAutoARIMA
 """
@@ -21,12 +21,12 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 
 # LassoVARX implemented structures
-VALID_AR_STRUCTURES = [
+VALID_AUTOCORR_STRUCTURES = [
     'full',
     'concurrent'
 ]
 
-VALID_VAR_STRUCTURES = [
+VALID_CROSSCORR_STRUCTURES = [
     None,
     'full',
     'concurrent',
@@ -35,6 +35,12 @@ VALID_VAR_STRUCTURES = [
 VALID_EXOG_STRUCTURES = [
     'full',
     'concurrent'
+]
+
+VALID_CRITERIA = [
+    'aic',
+    'bic',
+    'cv'
 ]
 
 class LassoVARX:
@@ -52,23 +58,23 @@ class LassoVARX:
 
     Args:
         lags_endog (list[int], optional): 
-            Lags in days for endogenous regressors. Defaults to [1, 7].
+            Lags in days for endogenous regressors. Defaults to [1, 2, 3, 7].
         lags_exog (list[int], optional): 
-            Lags in days for exogenous regressors. Defaults to [0].
-        ar_structure (str, optional): 
-            Structure of univariate autoregressive terms ('concurrent' or 'full').
+            Lags in days for exogenous regressors. Defaults to [0, 1, 7].
+        autocorr_structure (str, optional): 
+            Structure of (univariate) autocorrelation terms ('concurrent' or 'full').
             Defaults to 'concurrent'.
-        var_structure (str or None, optional): 
-            Structure of vector autoregressive terms (None, 'concurrent', or 'full').
+        crosscorr_structure (str or None, optional): 
+            Structure of (multivariate) cross-correlation terms (None, 'concurrent', or 'full').
             Defaults to 'concurrent'.
         exog_structure (str, optional): 
             Structure of exogenous regressors ('concurrent' or 'full'). Defaults to 'concurrent'.
         daytype_dummies (list[str], optional): 
-            Names of dummy variables in exogenous data that are not lagged.
+            Names of dummy variables in exogenous data that shouldn't be lagged or considered in full structure.
             Defaults to ['is_Holiday', 'is_Monday', 'is_Saturday'].
         calibration_window (datetime.timedelta, optional): 
             Time span of historical data used for model calibration.
-            Defaults to `pd.Timedelta(days=358)`.
+            Defaults to `pd.Timedelta(days=364)`.
         criterion (str, optional): 
             Regularization selection method ('aic', 'bic', or 'cv'). Defaults to 'aic'.
         max_iter (int, optional): 
@@ -85,20 +91,20 @@ class LassoVARX:
             Random seed for reproducibility. Defaults to None.
 
     Raises:
-        ValueError: If any of `ar_structure`, `var_structure`, or `exog_structure` 
+        ValueError: If any of `autocorr_structure`, `crosscorr_structure`, or `exog_structure` 
             are not among the valid options.
     """
     def __init__(
             self,
-            lags_endog=[1, 7],
-            lags_exog=[0],
-            ar_structure='concurrent',
-            var_structure='concurrent',
+            lags_endog=[1, 2, 3, 7],
+            lags_exog=[0, 1, 7],
+            autocorr_structure='concurrent',
+            crosscorr_structure=None,
             exog_structure='concurrent',
             exog_force_no_lag=None,
             exog_force_concurrent=None,
-            daytype_dummies=['is_Holiday', 'is_Monday', 'is_Saturday'],
-            calibration_window=datetime.timedelta(days=358),
+            daytype_dummies=['is_holiday', 'is_monday', 'is_saturday'],
+            calibration_window=datetime.timedelta(days=364),
             criterion='aic',
             max_iter=2500,
             tol=1e-4,
@@ -107,22 +113,26 @@ class LassoVARX:
             ignore_convergence_warnings=True,
             random_state=None
         ):
-        if ar_structure not in VALID_AR_STRUCTURES:
-            raise ValueError(f"ar_structure must be one of {VALID_AR_STRUCTURES}")
-        if var_structure not in VALID_VAR_STRUCTURES:
-            raise ValueError(f"var_structure must be one of {VALID_VAR_STRUCTURES}")
+
+        if autocorr_structure not in VALID_AUTOCORR_STRUCTURES:
+            raise ValueError(f"ar_structure must be one of {VALID_AUTOCORR_STRUCTURES}")
+        if crosscorr_structure not in VALID_CROSSCORR_STRUCTURES:
+            raise ValueError(f"var_structure must be one of {VALID_CROSSCORR_STRUCTURES}")
         if exog_structure not in VALID_EXOG_STRUCTURES:
             raise ValueError(f"exog_structure must be one of {VALID_EXOG_STRUCTURES}")
+        if criterion not in VALID_CRITERIA:
+            raise ValueError(f"exog_structure must be one of {VALID_CRITERIA}")
+        
         self.calibration_window = calibration_window
         self.lags_endogs = lags_endog
         self.lags_exog = lags_exog
         self.daytype_dummies = daytype_dummies
         self._exog_concurrent = daytype_dummies + (exog_force_concurrent or [])
         self._exog_no_lag = daytype_dummies + (exog_force_no_lag or [])
-        self.ar_structure = ar_structure
-        self.var_structure = var_structure
+        self.autocorr_structure = autocorr_structure
+        self.crosscorr_structure = crosscorr_structure
         self.exog_structure = exog_structure
-        self.criterion = criterion # Can be 'aic' or 'bic' (LarsIC) or 'cv' LassoCV
+        self.criterion = criterion
         self.max_iter = max_iter
         self.tol = tol
         self.n_jobs = n_jobs
@@ -150,7 +160,6 @@ class LassoVARX:
 
         Xs = {}
         Ys = {}
-
 
         # Create the lagged exogenous variables with specified structure (concurrent or full)
         X_lagged = {}
@@ -208,20 +217,20 @@ class LassoVARX:
                     Y_lagged[lag] = target_df.shift(lag)
                     Y_lagged[lag].columns = [f"{var}_h{j}_L{lag}" for j in range(24)]
                 
-                if self.ar_structure == 'concurrent': # Only keep the lags for the current hour
+                if self.autocorr_structure == 'concurrent': # Only keep the lags for the current hour
                     for lag in self.lags_endogs:
                         Y_lagged[lag] = Y_lagged[lag].loc[:, [f"{var}_h{h}_L{lag}"]]
 
                 Xs[var][h] = pd.concat([X_h] + [Y_lagged[lag] for lag in self.lags_endogs], axis=1).iloc[7:, :]
 
-        if self.var_structure is not None: # We add the lags of all components of Y
+        if self.crosscorr_structure is not None: # We add the lags of all components of Y
             for i, y_target in enumerate(endog.columns):
                 for h in range(24):
                     other_y = [y_feature for y_feature in endog.columns if y_feature != y_target]
                     for y_feature in other_y:
-                        if self.var_structure == 'concurrent':
+                        if self.crosscorr_structure == 'concurrent':
                             var_terms = [f"{y_feature}_h{h}_L{lag}" for lag in self.lags_endogs]
-                        elif self.var_structure == 'full':
+                        elif self.crosscorr_structure == 'full':
                             var_terms = [f"{y_feature}_h{j}_L{lag}" for j in range(24) for lag in self.lags_endogs]
 
                         Xs[y_target][h] = pd.concat([Xs[y_target][h], Xs[y_feature][h].loc[:, var_terms]], axis=1)
@@ -235,6 +244,7 @@ class LassoVARX:
 
 
         return Ys, Xs
+    
     
     @staticmethod
     def _fit_single_hour(X, Y, h, criterion, max_iter, tol, random_state):
@@ -409,38 +419,6 @@ class LassoVARX:
         Y_pred = self.flatten_Ys(Ys_pred)
         
         return Y_pred
-    
-    
-    def fit_forecast_monthly_recal(self, endog, exog, test_start):
-        """
-        Performs rolling one-step ahead forecasts of all hours of the day simultaneously using a model that is retrained every month on the calibration window.
-        
-        Args:
-            endog (pd.DataFrame): The target multivariate hourly time series to forecast. Must have a valid datetime index.
-            exog (pd.DataFrame): The exogenous multivariate time series to forecast endog. Must have a datetime index aligned with endog.
-            test_start (datetime.date): The start of the test period for which the model will forecast.
-            verbose (bool, optional): If True, log training and forecasting periods. Defaults to True.
-        Returns:
-            pd.DataFrame: An hourly datetime-indexed dataframe containing the forecasted values for the test period.
-        """
-        Y_preds = []
-        current_datetime = pd.Timestamp(test_start)
-        end_datetime = endog.index[-1]
-
-        while current_datetime < end_datetime:
-            last_day_month = calendar.monthrange(current_datetime.year, current_datetime.month)[1]
-            horizon = pd.Timestamp(f"{current_datetime.year}-{current_datetime.month}-{last_day_month} 23:00:00")
-
-            if horizon <= end_datetime:
-                Y_pred = self.fit_forecast(endog[:horizon], exog[:horizon], current_datetime.date())
-            else:
-                Y_pred = self.fit_forecast(endog[:end_datetime], exog[:end_datetime], current_datetime.date())
-            
-            Y_preds.append(Y_pred)
-            current_datetime = horizon + pd.Timedelta(hours=1)
-            print("--------------------------------------------------")
-
-        return pd.concat(Y_preds)
     
 
     def fit_forecast_daily_recal(self, endog, exog, test_start, show_progress=True):
