@@ -96,6 +96,8 @@ def postprocess_postforecasts(
 
             if hourly:
                 final = pd.concat(hourly).sort_index()
+                # /!\ postprocessing specific to GME /!\
+                final.clip(lower=0, inplace=True)
                 out = os.path.join(output_folder, f"{method}_{window}D.pkl")
                 final.to_pickle(out)
                 print(f"✅ Saved {out}")
