@@ -22,7 +22,7 @@ weekday_mapping = {
     6: "sunday"
 }
 
-class GMEPreprocessor:
+class GMECurvesConstructor:
     """
     Class to handle GME curves preprocessing.
     Args:
@@ -38,47 +38,7 @@ class GMEPreprocessor:
         self.n_prices = n_prices
         self.float_precision = float_precision
 
-    # NOTE: To remove and be placed in other repository
-    def aggregate_xml_files(self, date_range, data_dir='../data'):
-        """
-        Aggregates XML files over a given date range into a single DataFrame.
-
-        For each date in the provided date range, this method constructs the expected XML file path,
-        checks for its existence, reads the XML file into a DataFrame (if present), and concatenates
-        all resulting DataFrames into a single DataFrame.
-
-        Args:
-            date_range (iterable): An iterable of datetime objects representing the dates to process.
-            data_dir (str, optional): The base directory where data is stored. Defaults to '../data'.
-
-        Returns:
-            pandas.DataFrame: A DataFrame containing the concatenated data from all found XML files.
-
-        Raises:
-            ValueError: If no XML files are found in the given date range.
-
-        Logs:
-            Warning messages for any missing XML files.
-        """
-        df_list = []
-        for date in tqdm(date_range):
-            date = date.strftime('%Y%m%d')
-            file_path = os.path.join(
-                data_dir,
-                self.market + GME_DATASET_NAME,
-                'daily',
-                str(date) + self.market + GME_DATASET_NAME + '.xml'
-            )
-            if not os.path.exists(file_path):
-                logging.warning(f"{file_path} not found")
-            else:
-                df = pd.read_xml(file_path, xpath=f'./{GME_DATASET_NAME}')
-            df_list.append(df)
-        df = pd.concat(df_list, ignore_index=True)
-        return df
-    
-
-    def get_curve_steps(self, bids, date, hour, type):
+    def _get_curve_steps(self, bids, date, hour, side):
         """
         Extracts and processes bid data for a specific date, hour, and type, returning cumulative quantities and prices.
         This method filters the input DataFrame for the specified date and hour, sorts the data based on price and type,
@@ -106,10 +66,10 @@ class GMEPreprocessor:
 
         df['cumQuantita'] = df.groupby('Tipo')['Quantita'].cumsum()
         
-        return df.loc[df.Tipo == type, ['cumQuantita', 'Prezzo']]
+        return df.loc[df.Tipo == side, ['cumQuantita', 'Prezzo']]
     
 
-    def add_import_export(self, steps, balance_df, date, hour):
+    def _add_import_export(self, steps, balance_df, date, hour):
         """
         Adjusts the cumulative quantity in the given DataFrame by adding the net import/export balance for a specific date, hour, and pool.
 
@@ -146,17 +106,17 @@ class GMEPreprocessor:
         df['cumQuantita'] = df['cumQuantita'] + balance
         return df
     
-    def add_block_orders(self, steps, bids, date, hour, type):
+    def _add_block_orders(self, steps, bids, date, hour, side):
         df = steps.copy()            
         today_bids = bids.loc[(bids.Data == date) & (bids.Ora == hour), :]
         block_orders = today_bids.loc[today_bids.TIPO_OFFERTA == 'B', :]
-        block_qty = block_orders.loc[block_orders.Tipo == type, 'QUANTITA_ACCETTATA'].sum()
+        block_qty = block_orders.loc[block_orders.Tipo == side, 'QUANTITA_ACCETTATA'].sum()
         df['cumQuantita'] = df['cumQuantita'] + block_qty
         return df
 
     
 
-    def get_qty_function(self, steps, xnew, type):
+    def _get_qty_function(self, steps, xnew, side):
         """
         Interpolates cumulative quantity values at specified price points using stepwise interpolation.
         This function sorts the input DataFrame by the 'Prezzo' column, normalizes the 'cumQuantita' column
@@ -179,7 +139,7 @@ class GMEPreprocessor:
         else:
             y = steps['cumQuantita']
             
-        if type == 'BID':
+        if side == 'BID':
             kind = 'next'
         else:
             kind = 'previous'
@@ -195,7 +155,7 @@ class GMEPreprocessor:
         return f(xnew)
     
 
-    def get_curves_dataset(self, input_df, type, balance_df, progress_bar=True):
+    def get_curves_dataset(self, input_df, side, balance_df, progress_bar=True):
         """
         Generates a dataset of curve values over a specified domain for each unique (Data, Ora) pair in the input DataFrame.
 
@@ -233,15 +193,15 @@ class GMEPreprocessor:
             list(zip(gme_hour_intervals['Data'], gme_hour_intervals['Ora'])),
             disable=not progress_bar
         ):
-            steps = self.get_curve_steps(df, date, hour, type)
+            steps = self._get_curve_steps(df, date, hour, side)
 
             if date >= 20250101: # Adding of block orders from this date
-                steps = self.add_block_orders(steps, df, date, hour, type)
+                steps = self._add_block_orders(steps, df, date, hour, side)
 
-            if type == 'OFF':
-                steps = self.add_import_export(steps, balance_df, date, hour)
+            if side == 'OFF':
+                steps = self._add_import_export(steps, balance_df, date, hour)
 
-            data_matrix[idx, :] = self.get_qty_function(steps, grid_points, type)
+            data_matrix[idx, :] = self._get_qty_function(steps, grid_points, side)
             idx += 1
 
         # Necessary to transform into DataFrame to use fix_daylight_saving_time
