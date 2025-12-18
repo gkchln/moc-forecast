@@ -468,10 +468,10 @@ class PriceForecaster:
         Args:
             model (LassoVARX): The LassoVARX forecasting model.
         """
-        if model.var_structure:
+        if model.crosscorr_structure:
             logging.warning("LassoVARX model was instantiated with a var_structure which is not applicable to PriceForecaster. "
                             "The var_structure will be set to None.")
-            model.var_structure = None
+            model.crosscorr_structure = None
         self.model = model
         self.transformer_prices = InvariantScaler()
 
@@ -572,6 +572,18 @@ class PriceForecaster:
             prices_preds.append(prices_pred)
 
         return pd.concat(prices_preds, axis=0)
+    
+
+    def to_pickle(self, path: str, verbose=False):
+        if not path.endswith('.pkl'):
+            logging.warning("It's recommended to provide a path with a .pkl (pickle) extension.")
+        if not os.path.isdir(os.path.dirname(path)):
+            raise ValueError(f"The directory {os.path.dirname(path)} does not exist.")
+        else:
+            with open(path, 'wb') as f:
+                pickle.dump(self, f)
+            if verbose:
+                logging.info(f"Forecaster saved to {path}")
 
 
 #####################################
