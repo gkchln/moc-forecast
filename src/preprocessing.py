@@ -13,13 +13,13 @@ pd.options.mode.chained_assignment = None  # default='warn'
 GME_DATASET_NAME = 'DomandaOfferta'
 
 weekday_mapping = {
-    0: "Monday",
-    1: "Tuesday",
-    2: "Wednesday",
-    3: "Thursday",
-    4: "Friday",
-    5: "Saturday",
-    6: "Sunday"
+    0: "monday",
+    1: "tuesday",
+    2: "wednesday",
+    3: "thursday",
+    4: "friday",
+    5: "saturday",
+    6: "sunday"
 }
 
 class GMEPreprocessor:
@@ -333,15 +333,15 @@ class ExogPreprocessor:
 
         # Add day type in which we make the distinction between Mondays, Working days (From Tuesday to Friday), Saturdays and Holidays (including Sundays)
         holidays_it = holidays.IT(years=df.index.year.unique()) # Retrieve holidays in Italy
-        df['daytype'] = 'Working day'
-        df.loc[df.weekday == 'Saturday', 'daytype'] = 'Saturday'
-        df.loc[df.weekday == 'Sunday', 'daytype'] = 'Holiday' # Flag Sundays as holidays
-        df.loc[df.weekday == 'Monday', 'daytype'] = 'Monday'
-        df.loc[pd.Series(df.index.date, index=df.index).apply(lambda day: day in holidays_it), 'daytype'] = 'Holiday'
+        df['daytype'] = 'working-day'
+        df.loc[df.weekday == 'saturday', 'daytype'] = 'saturday'
+        df.loc[df.weekday == 'sunday', 'daytype'] = 'holiday' # Flag Sundays as holidays
+        df.loc[df.weekday == 'monday', 'daytype'] = 'monday'
+        df.loc[pd.Series(df.index.date, index=df.index).apply(lambda day: day in holidays_it), 'daytype'] = 'holiday'
 
         # Get dummy variables
         df = pd.get_dummies(df, columns=['daytype'], prefix='is')
-        df.drop(['weekday', 'is_Working day'], axis=1, inplace=True)
+        df.drop(['weekday', 'is_working-day'], axis=1, inplace=True)
 
         # We store the dummy columns in a separate attribute for later use
         self.dummy_columns = [col for col in df.columns if col.startswith('is_')]
