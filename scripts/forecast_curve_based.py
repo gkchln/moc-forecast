@@ -1,5 +1,6 @@
 import pandas as pd
 from datetime import date, timedelta
+from os.path import join
 import os
 import sys
 import logging
@@ -11,25 +12,11 @@ import argparse
 
 ### Fixed parameters ###
 
-random_state = 42
-
-exog_variables = [
-    'GFSo Solar ITA',
-    'ECo Wind ITA',
-    'Load_IT',
-    'FR > IT',
-    'CH > IT',
-]
-
-lags_endog = [1, 2, 3, 7]
-lags_exog = [0, 1, 7]
-
-exog_structure = 'concurrent'
-
-exog_force_concurrent = None
-exog_force_no_lag = None
-
-criterion = 'aic'
+LAGS_ENDOG = [1, 2, 3, 7]
+LAGS_EXOG = [0, 1, 7]
+EXOG_STRUCTURE = 'concurrent'
+CRITERION = 'aic'
+RANDOM_STATE = 42
 
 def main(
         endog_path,
@@ -39,8 +26,8 @@ def main(
         K_demand,
         choice_K,
         transformer,
-        ar_structure,
-        var_structure,
+        autocorr_structure,
+        crosscorr_structure,
         calibration_window,
         test_start_date,
         test_end_date,
@@ -49,27 +36,27 @@ def main(
     """Run the daily recalibration forecast pipeline."""
 
     ### Setup logging ###
-    run_name = "{ar_struc}_{var_struc}_{lags_endog}_{exog_struc}_{lags_exog}_{transformer}" \
+    run_name = "{autocorr_struc}_{crosscorr_struc}_{lags_endog}_{exog_struc}_{lags_exog}_{transformer}" \
     "_{K_supply}_{K_demand}_{choice_K}_{calib_wind}_{criterion}_{test_start}_{test_end}".format(
-        ar_struc = str(ar_structure).lower()[:4], # 'conc' or 'full'
-        var_struc = str(var_structure).lower()[:4], # 'conc', 'full' or 'none'
-        lags_endog = ''.join(map(str, lags_endog)), # e.g. '1237' for lags 1, 2, 3 and 7
-        exog_struc = str(exog_structure).lower()[:4], # 'conc' or 'full'
-        lags_exog = ''.join(map(str, lags_exog)), # e.g. '017' for lags 0, 1 and 7
+        autocorr_struc = str(autocorr_structure).lower()[:4], # 'conc' or 'full'
+        crosscorr_struc = str(crosscorr_structure).lower()[:4], # 'conc', 'full' or 'none'
+        lags_endog = ''.join(map(str, LAGS_ENDOG)), # e.g. '1237' for lags 1, 2, 3 and 7
+        exog_struc = str(EXOG_STRUCTURE).lower()[:4], # 'conc' or 'full'
+        lags_exog = ''.join(map(str, LAGS_EXOG)), # e.g. '017' for lags 0, 1 and 7
         transformer = transformer, # 'fpca' or 'zst'
         K_supply = K_supply or 'none',
         K_demand = K_demand or 'none',
         choice_K = choice_K or 'none',
         calib_wind = calibration_window.days,
-        criterion = criterion, 
+        criterion = CRITERION, 
         test_start = test_start_date.strftime('%Y%m%d'), # e.g. 20240101
         test_end = test_end_date.strftime('%Y%m%d') # e.g. 20241231
     )
 
     # Ensure logs folder exists
-    log_folder = os.path.join(save_folder, "_logs")
+    log_folder = join(save_folder, "_logs")
     os.makedirs(log_folder, exist_ok=True)
-    log_file = os.path.join(log_folder, f"{run_name}.log")
+    log_file = join(log_folder, f"{run_name}.log")
 
     # Configure logging
     logging.basicConfig(
@@ -90,7 +77,7 @@ def main(
 
     ### Read data ###
     sd = load_sdts(endog_path)
-    exog = pd.read_pickle(exog_path)
+    exog = pd.read_csv(exog_path, index_col=0, parse_dates=True)
 
     ### Preprocess data ###
     # Start and end datetimes
@@ -100,27 +87,18 @@ def main(
     preprocess_start = train_start - timedelta(weeks=1) # We need one week of past data to compute the lags
 
     sd = sd[preprocess_start:test_end]
-
-    exogprep = ExogPreprocessor(
-        start_date=preprocess_start.date(),
-        end_date=test_end_date,
-        exog_variables=exog_variables
-    )
-    exog = exogprep.preprocess_exog(exog)
-
+    exog = exog.loc[preprocess_start:test_end, :]
 
     ### Forecast ###
     model = LassoVARX(
-        lags_endog=lags_endog,
-        lags_exog=lags_exog,
-        ar_structure=ar_structure,
-        var_structure=var_structure,
-        exog_structure=exog_structure,
+        lags_endog=LAGS_ENDOG,
+        lags_exog=LAGS_EXOG,
+        autocorr_structure=autocorr_structure,
+        crosscorr_structure=crosscorr_structure,
+        exog_structure=EXOG_STRUCTURE,
         calibration_window=calibration_window,
-        exog_force_concurrent=exog_force_concurrent,
-        exog_force_no_lag=exog_force_no_lag,
-        criterion=criterion,
-        random_state=42,
+        criterion=CRITERION,
+        random_state=RANDOM_STATE,
         n_jobs=-1,
     )
 
@@ -134,17 +112,20 @@ def main(
 
     sd_pred = forecaster.fit_forecast_rolling(sd, exog, test_start_date, show_progress=show_progress)
 
-    ### Save results ###
-    outputs = ['curves', 'forecasters']
-    output_paths = {}
-    for output in outputs:
-        folder = os.path.join(save_folder, output)
-        os.makedirs(folder, exist_ok=True)
-        output_paths[output] = os.path.join(folder, f"{run_name}.pkl")
+    prices_pred = sd_pred.get_clearing_prices()
+    prices_true = sd.get_clearing_prices()
 
     ### Save results ###
-    sd_pred.to_pickle(output_paths['curves'])
-    forecaster.to_pickle(output_paths['forecasters'])
+    logging.info("MAE: {:.2f}€/MWh".format((prices_true - prices_pred).abs().mean()))
+    curves_folder = join(save_folder, 'curves')
+    price_folder = join(save_folder, 'prices')
+    forecasters_folder = join(save_folder, 'forecasters')
+    os.makedirs(curves_folder, exist_ok=True)
+    os.makedirs(price_folder, exist_ok=True)
+    os.makedirs(forecasters_folder, exist_ok=True)
+    sd_pred.to_pickle(join(curves_folder, f'{run_name}.pkl'))
+    prices_pred.to_csv(join(price_folder, f'{run_name}.csv'), index=True)
+    forecaster.to_pickle(join(forecasters_folder, f'{run_name}.pkl'))
 
     logging.info(f"Done.")
 
@@ -158,8 +139,10 @@ if __name__ == "__main__":
     parser.add_argument("--K_supply", dest="K_supply", type=int, help="Number of supply curves features")
     parser.add_argument("--K_demand", dest="K_demand", type=int, help="Number of demand curves features")
     parser.add_argument("--transformer", dest="transformer", choices=["fpca", "zst"], help="Curve transformer to use ('fpca' or 'zst')")
-    parser.add_argument("--ar_structure", dest="ar_structure", choices=["concurrent", "full"], help="Autoregressive structure ('concurrent' or 'full')")
-    parser.add_argument("--var_structure", dest="var_structure", choices=["concurrent", "full", "none"], help="VAR structure ('concurrent', 'full' or None)")
+    parser.add_argument("--autocorr_structure", dest="autocorr_structure", choices=["concurrent", "full"],
+                        help="Autocorrelation structure ('concurrent' or 'full')")
+    parser.add_argument("--crosscorr_structure", dest="crosscorr_structure", choices=["concurrent", "full", "none"],
+                        help="Cross-correlation structure ('concurrent', 'full' or None)")
     parser.add_argument("--choice_K", dest="choice_K", choices=["none", "threshold", "elbow", "threshold-elbow", "elbow-mcp"],
                         help="Strategy to choose K", default="none")
     parser.add_argument("--calib_window", dest="calibration_window", type=int, help="Calibration window in days", default=364)
@@ -169,8 +152,8 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    if args.var_structure == "none":
-        args.var_structure = None
+    if args.crosscorr_structure == "none":
+        args.crosscorr_structure = None
 
     if args.choice_K == "none":
         args.choice_K = None
@@ -190,8 +173,8 @@ if __name__ == "__main__":
         args.K_demand,
         args.choice_K,
         args.transformer,
-        args.ar_structure,
-        args.var_structure,
+        args.autocorr_structure,
+        args.crosscorr_structure,
         args.calibration_window,
         args.test_start_date,
         args.test_end_date,
