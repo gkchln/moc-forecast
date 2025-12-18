@@ -1,7 +1,11 @@
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import seaborn as sns
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
+import datetime as dt
 import pandas as pd
+import os
 import numpy as np
 import itertools
 import math
@@ -14,6 +18,7 @@ from skfda.preprocessing.dim_reduction import FPCA
 from skfda.misc.scoring import r2_score
 
 from .curves import SupplyDemandFPCA, SupplyDemandTimeSeries
+from .forecasters import SupplyDemandForecaster
 from .evaluation import *
 
 colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
@@ -80,11 +85,35 @@ def plot_fpca_cumulative_variance(
     return fig
 
 
+import matplotlib.dates as mdates
+
+def plot_number_of_fpcs(
+        forecaster: SupplyDemandForecaster,
+        ylim=(0, 10),
+        savefig=False,
+        path=None
+    ):
+    _, ax = plt.subplots(figsize=(5.5, 3), sharey=True, sharex=True)
+    # TODO: Need to take dates from forecaster attribute
+    dates = pd.date_range('2024-01-01', '2024-12-31', freq='D')
+    #dates = forecaster.forecast_dates_
+    ax.plot(dates, forecaster.K_supply_, label='$K_s$ (Supply)')
+    ax.plot(dates, forecaster.K_demand_, label='$K_d$ (Demand)')
+    ax.set_ylim(ylim)
+    ax.grid(True, linewidth=0.5, linestyle='--')
+    ax.legend()
+    if savefig:
+        plt.savefig(path, dpi=300, bbox_inches="tight")
+    return ax
+
+
 def plot_fpcs_effect(
         fpca: FPCA,
         fig: mpl.figure.Figure = None,
         figsize: tuple[int, int] = (15, 10),
         n_fpcs: int | None = None,
+        savefig=False,
+        path: str | None = None,
         **kwargs
     ):
     custom_colors = ["#707070", "#2ca02c", "#d62728"]
@@ -113,8 +142,110 @@ def plot_fpcs_effect(
         # ax.set_ylim(top=60, bottom=20)
         # ax.set_ylim(top=40, bottom=0)
         ax.set_title(f"FPC {i+1} \n({100*fpca.explained_variance_ratio_[i]:.2f}%)")
+
+    if savefig:
+        plt.savefig(path, dpi=300, bbox_inches="tight")
+
     return fig
-    # plt.savefig('../plots/eem25/fpcs_off.png', dpi=300)
+
+
+
+def plot_dynamic_fpcs(
+        forecaster: SupplyDemandForecaster,
+        side: str,
+        n_fpcs: int,
+        nrows=2,
+        xlim=(0, 300),
+        figsize=(11, 4.5),
+        cmap='viridis',
+        colorbar=True,
+        savefig=False,
+        path=None,
+    ):
+    ncols = n_fpcs // nrows
+
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        figsize=figsize,
+        sharex=True,
+        sharey=True,
+        squeeze=False
+    )
+
+    cmap = plt.get_cmap(cmap)
+    n_days = len(forecaster.transformers_)
+
+    # --- Plot FPCs ---
+    for i in range(n_days):
+        color = cmap(i / n_days)
+
+        for j in range(n_fpcs):
+            if side == 'supply':
+                fpca = forecaster.transformers_[i].transformer_supply_
+            else:
+                fpca = forecaster.transformers_[i].transformer_demand_
+            fpc = fpca.components_[j]
+
+            # /!\ (Very) hotfix for managing arbitrary sign switches of FPCs /!\
+            if side == 'supply':
+                if j == 3 and fpc.data_matrix[0, 0, 0] > 0:
+                    fpc = -fpc
+                elif j == 4 and fpc.data_matrix[0, -1, 0] > 0:
+                    fpc = -fpc
+                elif j == 5 and fpc.data_matrix[0, 0, 0] < 0:
+                    fpc = -fpc
+                elif j == 7 and fpc.data_matrix[0, 100, 0] > 0:
+                    fpc = -fpc
+
+            ax = axes[j // ncols, j % ncols]
+            fpc.plot(axes=ax, color=color, linewidth=0.2)
+
+    # --- Axes formatting ---
+    for j in range(n_fpcs):
+        ax = axes[j // ncols, j % ncols]
+        ax.grid(True, linewidth=0.5, linestyle='--')
+        ax.set_title(f"FPC {j + 1}")
+        ax.set_xlim(xlim)
+
+        if i == nrows - 1:
+            ax.set_xlabel("Price [€/MWh]")
+
+    fig.subplots_adjust(hspace=0.3)
+
+    # --- Colorbar on top ---
+    if colorbar:
+        # /!\ Hard-coded for paper /!\
+        dates = [dt.date(2024, 1, 1) + dt.timedelta(days=i) for i in range(n_days)]
+        tick_dates = [dt.date(2024, m, 1) for m in [1, 4, 7, 10]] + [dt.date(2024, 12, 31)]
+
+        tick_positions = [(d - dates[0]).days + 1 for d in tick_dates]
+        tick_labels = [d.strftime("%Y-%m-%d") for d in tick_dates]
+
+        norm = mcolors.Normalize(vmin=1, vmax=n_days)
+        sm = cm.ScalarMappable(cmap=cmap, norm=norm)
+        sm.set_array([])
+
+        cax = fig.add_axes([0.3, 1.05, 0.4, 0.03])
+        cbar = fig.colorbar(sm, cax=cax, orientation="horizontal")
+
+        cbar.set_ticks(tick_positions)
+        cbar.set_ticklabels(tick_labels)
+
+        cax.text(
+            0.5,
+            2,
+            "Predicted day",
+            ha="center",
+            va="bottom",
+            transform=cax.transAxes,
+            fontsize=12,
+        )
+
+    # --- Save ---
+    if savefig:
+        plt.savefig(path, dpi=300, bbox_inches="tight")
+
+    return fig
 
 
 
