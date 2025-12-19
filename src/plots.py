@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
+from cycler import cycler
 import datetime as dt
 import pandas as pd
 import os
@@ -24,16 +25,12 @@ from .evaluation import *
 colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
 
-def color_map(val, min_val, max_val, invert=False, decimals=3):
+def _color_map(val, min_val, max_val, invert=False, decimals=3):
     """
-    Returns a LaTeX cell color interpolated between custom red-yellow-green
-    colormap based on the value of val between min_val and max_val.
     The colormap is defined as:
        low: (218, 134, 118)
        middle: (248, 215, 120)
        high: (113, 185, 142)
-    If invert=True, the gradient is flipped.
-    decimals: number of decimal places to display in the cell
     """
     norm = (val - min_val) / (max_val - min_val)
     if invert:
@@ -53,6 +50,48 @@ def color_map(val, min_val, max_val, invert=False, decimals=3):
         b = int(120 + t * (142 - 120))
 
     return f"\\cellcolor[RGB]{{{r},{g},{b}}}{val:.{decimals}f}"
+
+
+def format_heatmap_latex_table(
+        df,
+        decimals: int | Dict[str, int],
+        invert_cmap=False,
+        per_column=True
+    ):
+    """
+    Returns a DataFrame formatted as a LaTeX table with cell color interpolated between
+    custom red-yellow-green colormap based on cell value and df min and max values (per
+    column or across whole datframe).
+
+    Args:
+        df: DataFrame to format as LaTeX table.
+        decimals: Number of decimal places to round to. Can be an integer to apply to all columns,
+            or a dictionary mapping column names to number of decimal places.
+        invert_cmap: Whether to invert the colormap. Defaults to False.
+        per_column: Whether to normalize colors per column (True) or across the entire DataFrame (False).
+            Defaults to True.
+    Returns:
+        List of formatted LaTeX table rows as strings, with color-coded cells based on values.
+    """
+    if isinstance(decimals, int):
+        decimals = dict(zip(df.columns, [decimals] * df.shape[1]))
+    latex_rows = []
+    for i, row in df.iterrows():
+        row_str = [f"\\textbf{{{i}}}"]
+        for col in df.columns:
+            if per_column:
+                min_val = df[col].min()
+                max_val = df[col].max()
+            else:
+                min_val = df.min(axis=None)
+                max_val = df.max(axis=None)
+            formatted_cell = _color_map(df.loc[i, col], min_val, max_val,
+                                     invert=invert_cmap, decimals=decimals[col])   
+            row_str.append(formatted_cell)
+        latex_rows.append(" & ".join(row_str) + " \\\\")
+    return latex_rows
+
+
 
 
 # -------------------------
@@ -93,7 +132,7 @@ def plot_number_of_fpcs(
         savefig=False,
         path=None
     ):
-    _, ax = plt.subplots(figsize=(5.5, 3), sharey=True, sharex=True)
+    fig, ax = plt.subplots(figsize=(5.5, 3), sharey=True, sharex=True)
     # TODO: Need to take dates from forecaster attribute
     dates = pd.date_range('2024-01-01', '2024-12-31', freq='D')
     #dates = forecaster.forecast_dates_
@@ -104,7 +143,7 @@ def plot_number_of_fpcs(
     ax.legend()
     if savefig:
         plt.savefig(path, dpi=300, bbox_inches="tight")
-    return ax
+    return fig
 
 
 def plot_fpcs_effect(
@@ -117,34 +156,36 @@ def plot_fpcs_effect(
         **kwargs
     ):
     custom_colors = ["#707070", "#2ca02c", "#d62728"]
-    sns.set_palette(custom_colors)
 
-    if not fig:
-        fig = plt.figure(figsize=figsize)
+    with mpl.rc_context({
+        "axes.prop_cycle": cycler(color=custom_colors)
+    }):
+        if fig is None:
+            fig = plt.figure(figsize=figsize)
 
-    K = n_fpcs if n_fpcs else fpca.n_components
+        K = n_fpcs if n_fpcs else fpca.n_components
 
-    fig = FPCAPlot(fpca.mean_, fpca.components_[:K], fig=fig, **kwargs).plot()
+        fig = FPCAPlot(
+            fpca.mean_, fpca.components_[:K], fig=fig, **kwargs
+        ).plot()
 
-    for i, ax in enumerate(fig.get_axes()):
-        ax.grid(True, axis='x', linestyle='--', alpha=0.5)
+        for i, ax in enumerate(fig.get_axes()):
+            ax.grid(True, axis='x', linestyle='--', alpha=0.5)
 
-        if i > 0:  # Hide x-ticks and labels for all but the first plot
-            ax.set_yticklabels([])
-            ax.set_yticks([])
-        else:
-            ax.grid(False, axis='y')
-            ax.set_ylabel('Quantity [MWh]')
-        
-        ax.set_xlabel('Price [€/MWh]')
+            if i > 0:
+                ax.set_yticklabels([])
+                ax.set_yticks([])
+            else:
+                ax.grid(False, axis='y')
+                ax.set_ylabel('Quantity [MWh]')
 
-        # ax.set_xlim((20, 60))
-        # ax.set_ylim(top=60, bottom=20)
-        # ax.set_ylim(top=40, bottom=0)
-        ax.set_title(f"FPC {i+1} \n({100*fpca.explained_variance_ratio_[i]:.2f}%)")
+            ax.set_xlabel('Price [€/MWh]')
+            ax.set_title(
+                f"FPC {i+1}\n({100*fpca.explained_variance_ratio_[i]:.2f}%)"
+            )
 
-    if savefig:
-        plt.savefig(path, dpi=300, bbox_inches="tight")
+        if savefig:
+            fig.savefig(path, dpi=300, bbox_inches="tight")
 
     return fig
 
@@ -332,11 +373,12 @@ def plot_curves_price_prediction(
     plt.text(0.8, 0.84, f'Predicted: {price_pred:.0f} €/MWh', ha='right', va='center',
              transform=plt.gca().transAxes, fontsize=text_fontsize, color=colors[1], weight='semibold')
 
-    if savefig:
+    if savefig and path is not None:
         plt.savefig(path, dpi=300, bbox_inches='tight')
+    else:
+        plt.show()
 
-    plt.show()
-    plt.close(fig)
+    return fig
 
 
 
@@ -398,8 +440,9 @@ def plot_hourly_avg_error(
 
     if savefig and path is not None:
         plt.savefig(path, dpi=300, bbox_inches="tight")
-
-    plt.show()
+        plt.close(fig)
+    else:
+        plt.show()
 
     return hourly_avg_errors
 
@@ -425,6 +468,8 @@ def plot_price_scatter(prices_true, prices_pred, models, savefig=False, path=Non
 
     if savefig and path is not None:
         plt.savefig(path, dpi=300, bbox_inches="tight")
+
+    return fig
 
 
 
@@ -484,8 +529,10 @@ def plot_pit_histograms(
         ax.axis('off')
     
     fig.tight_layout()
-    if savefig:
+    if savefig and path is not None:
         plt.savefig(path, dpi=300, bbox_inches='tight')
+    else:
+        plt.show()
 
     return fig
 
@@ -580,6 +627,8 @@ def plot_width_error_correlation(widths, errors, annotate=False, trend='linear',
 
     if savefig and path is not None:
         plt.savefig(path, dpi=300, bbox_inches='tight')
+    else:
+        plt.show()
 
     return fig
 
@@ -617,7 +666,7 @@ def plot_day_level_dm_test(
         models_order=None,
         title=None,
         savefig=False,
-        path='',
+        path=None,
         fontsize=10,
         pad_title=15
     ):
@@ -689,10 +738,13 @@ def plot_day_level_dm_test(
     plt.tight_layout()
     plt.grid(False)
 
-    if savefig:
+    if savefig and path is not None:
         plt.savefig(path, dpi=300, bbox_inches='tight')
+    else:
+        plt.show()
+    plt.close()
 
-    plt.show()
+    return p_values
 
 
 def plot_hour_level_dm_test(
@@ -704,7 +756,7 @@ def plot_hour_level_dm_test(
         colormap='coolwarm',
         title=None,
         savefig=False,
-        path='',
+        path=None,
         fontsize=10,
         pad_title=15
     ):
@@ -780,9 +832,10 @@ def plot_hour_level_dm_test(
     plt.tight_layout()
     plt.grid(False)
 
-    if savefig:
+    if savefig and path is not None:
         plt.savefig(path, dpi=300, bbox_inches='tight')
-
-    plt.show()
+    else:
+        plt.show()
+    plt.close()
 
     return n_signif_hours
