@@ -3,6 +3,7 @@ data/
 plots/
 notebooks/
 results/
+documents/
 
 # Misc.
 .DS_Store
