@@ -330,7 +330,7 @@ print(f"✅ Successfully generated {outfile}")
 # Hour-level
 outfile = join(plots_folder, 'dm_test_prices_hourly.png')
 nb_signif_hours = plot_hour_level_dm_test(prices_true, prices_pred, scope='scalar', models_order=models_order,
-             savefig=True, path=outfile, fontsize=10, colormap='inferno',
+             savefig=True, path=outfile, colormap='inferno',
              title="Number of hours resulting significant", pad_title=10)
 print(f"✅ Successfully generated {outfile}")
 outfile = join(tables_folder, 'dm_test_prices_hourly.csv')
@@ -537,7 +537,7 @@ print(f"✅ Successfully generated {outfile}")
 # Hour-level
 outfile = join(plots_folder, 'dm_test_quantiles_hourly.png')
 nb_signif_hours = plot_hour_level_dm_test(prices_true[prob_test_start:], quantiles_avg, scope='quantiles',
-                        models_order=prob_models, savefig=True, path=outfile, fontsize=10,
+                        models_order=prob_models, savefig=True, path=outfile,
                         colormap='inferno', title="Number of hours resulting significant", pad_title=10)
 print(f"✅ Successfully generated {outfile}")
 outfile = join(tables_folder, 'dm_test_quantiles_hourly.csv')
