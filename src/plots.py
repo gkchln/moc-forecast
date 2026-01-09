@@ -667,7 +667,7 @@ def plot_day_level_dm_test(
         title=None,
         savefig=False,
         path=None,
-        fontsize=10,
+        fontsize=11,
         pad_title=15
     ):
     """Plotting the results of comparing forecasts using the DM test. 
@@ -757,7 +757,7 @@ def plot_hour_level_dm_test(
         title=None,
         savefig=False,
         path=None,
-        fontsize=10,
+        fontsize=11,
         pad_title=15
     ):
     """Plotting the results of comparing forecasts using the functional DM test. 
