@@ -1,14 +1,15 @@
 # moc-forecast
 
-Forecasting electricity day-ahead market merit-order curves and price with functional time series
+This repository contains the code associated with the following paper:
+
+> Koechlin, G., Bovera, F., & Secchi, P. (2025). **Day-Ahead Electricity Price Forecasting Using Merit-Order Curves Time Series.**. _arXiv preprint_. [`doi.org/10.48550/arXiv.2512.17758`](https://doi.org/10.48550/arXiv.2512.17758)
+
 
 ## Description
 
 This project implements forecasting models for electricity day-ahead market merit-order curves (supply and demand curves) and clearing prices using functional time series analysis. It leverages techniques such as Functional Principal Component Analysis (FPCA), Ziel-Steinert Transformation (ZST), and VARX models with Lasso regularization for point forecasts, as well as Monte Carlo simulations for probabilistic forecasts.
 
 The project is structured around curve-based and price-based forecasting approaches, with support for rolling recalibration and evaluation metrics like MAE, CRPS, and DM tests.
-
-This repository serves as the replication package for the paper: [forthcoming].
 
 ## Installation
 
