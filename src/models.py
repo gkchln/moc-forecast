@@ -69,6 +69,10 @@ class LassoVARX:
             Defaults to 'concurrent'.
         exog_structure (str, optional): 
             Structure of exogenous regressors ('concurrent' or 'full'). Defaults to 'concurrent'.
+        exog_force_no_lag (list[str], optional): 
+            Names of exogenous variables that should not be lagged. Defaults to None.
+        exog_force_concurrent (list[str], optional): 
+            Names of exogenous variables that must necessarily be included with a concurrent structure (e.g. daily data). Defaults to None.
         daytype_dummies (list[str], optional): 
             Names of dummy variables in exogenous data that shouldn't be lagged or considered in full structure.
             Defaults to ['is_Holiday', 'is_Monday', 'is_Saturday'].
