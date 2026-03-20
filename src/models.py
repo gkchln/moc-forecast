@@ -48,7 +48,7 @@ class LassoVARX:
     Lasso-estimated Vector AutoRegressive model with eXogenous covariates (LassoVARX).
 
     This model estimates a set of 24 hourly Lasso regressions — one for each hour of the day —
-    to model multivariate time series with exogenous inputs. It supports different structural
+    to model multivariate daily time series with exogenous inputs. It supports different structural
     configurations for autoregressive, vector autoregressive, and exogenous components, and
     can be trained using various regularization selection criteria (AIC, BIC, or cross-validation).
 
