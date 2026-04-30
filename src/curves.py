@@ -20,7 +20,7 @@ from skfda.misc.hat_matrix import NadarayaWatsonHatMatrix
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Sequence, Any, Optional, Union, runtime_checkable, Protocol
-from .utils import find_zeros, is_strictly_monotonic, get_inverse_function
+from .utils import find_zeros, is_strictly_monotonic, get_inverse_function, trapezoidal_weights
 
 
 ###### Helper functions ######
@@ -357,8 +357,12 @@ class SupplyDemandFPCA(SupplyDemandTransformer):
         self.demand_features_names = [f'FPC{i}b' for i in range(1, self.K_demand + 1)]
 
     def fit(self, sd: "SupplyDemandTimeSeries"):
-        self.transformer_supply_ = FPCA(n_components=self.K_supply).fit(sd.supply)
-        self.transformer_demand_ = FPCA(n_components=self.K_demand).fit(sd.demand)
+        grid = sd.price_grid
+        # We do our own trapezoidal rule for the weights since FPCA uses simpson integration under the hood which
+        # breaks when the price grid is non-uniform
+        weights = trapezoidal_weights(grid)
+        self.transformer_supply_ = FPCA(n_components=self.K_supply, _weights=weights).fit(sd.supply)
+        self.transformer_demand_ = FPCA(n_components=self.K_demand, _weights=weights).fit(sd.demand)
         return self
     
     def reduce(self, new_K_supply: int, new_K_demand: int) -> "SupplyDemandFPCA":
