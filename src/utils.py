@@ -147,6 +147,16 @@ def find_nan_ranges(df):
     return nan_periods
 
 
+def trapezoidal_weights(grid: np.ndarray) -> np.ndarray:
+    """Compute trapezoidal integration weights for a 1D grid."""
+    deltas = np.diff(grid)
+    return np.concatenate([
+        [deltas[0] / 2],
+        (deltas[:-1] + deltas[1:]) / 2,
+        [deltas[-1] / 2]
+    ])
+
+
 def find_zeros(x, y):
     """
     Find the zeros of a function given sampled x and y values.
