@@ -343,7 +343,7 @@ class ExogPreprocessor:
         end_date (datetime.date): End date of the preprocessing period
         exog_variables (list[str]): List of exogenous variables to include (see aliases in params.py)
     """
-    def __init__(self, start_date: datetime.date, end_date: datetime.date, exog_variables: list[str], timezone: str = 'Europe/Rome'):
+    def __init__(self, start_date: datetime.date, end_date: datetime.date, exog_variables: list[str], market: str, timezone: str = 'Europe/Rome'):
         self.timezone = timezone
         self.start_date = start_date
         self.start_datetime = pd.Timestamp(year=start_date.year, month=start_date.month, day=start_date.day, hour=0, tz=timezone)
