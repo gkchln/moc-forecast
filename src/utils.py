@@ -44,7 +44,7 @@ def get_dst_transition_days(start_year, end_year, timezone='Europe/Rome'):
 hour_gain_days, hour_loss_days = get_dst_transition_days(2000, 2035) # WARNING: Hard-coded
 
 
-def fix_daylight_saving_time(input_df):
+def fix_daylight_saving_time(input_df: pd.DataFrame) -> pd.DataFrame:
     """
     Fixes the daylight saving time in a DataFrame with a DatetimeIndex. It removes duplicate rows corresponding to the additional 02:00-03:00
     hour interval in gain days and fills out missing hours in hour loss days.
