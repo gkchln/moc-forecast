@@ -99,9 +99,6 @@ def main(
 
     prices_pred = forecaster.fit_forecast_rolling(prices, exog, test_start_date, show_progress=show_progress)
 
-    # /!\ postprocessing specific to GME /!\
-    prices_pred.clip(lower=0, inplace=True)
-
     ### Save ###
     logging.info("MAE: {:.2f}€/MWh".format((prices - prices_pred).squeeze().abs().mean()))
     price_folder = join(save_folder, 'prices')
