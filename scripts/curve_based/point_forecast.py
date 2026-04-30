@@ -152,6 +152,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    if args.choice_K == "none" and (args.K_supply is None or args.K_demand is None):
+        parser.error("--K_supply and --K_demand are required when --choice_K is 'none'")
+
     if args.crosscorr_structure == "none":
         args.crosscorr_structure = None
 
