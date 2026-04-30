@@ -350,6 +350,9 @@ class ExogPreprocessor:
         self.end_date = end_date
         self.end_datetime = pd.Timestamp(year=end_date.year, month=end_date.month, day=end_date.day, hour=23, tz=timezone)
         self.exog_variables = exog_variables
+        if market not in ['GME', 'EPEX-DE']:
+            raise ValueError("market should be 'GME' or 'EPEX-DE'")
+        self.market = market
 
 
     @staticmethod
@@ -409,12 +412,16 @@ class ExogPreprocessor:
         df['weekday'] = df.index.weekday.map(weekday_mapping)
 
         # Add day type in which we make the distinction between Mondays, Working days (From Tuesday to Friday), Saturdays and Holidays (including Sundays)
-        holidays_it = holidays.IT(years=df.index.year.unique()) # Retrieve holidays in Italy
+        if self.market == 'GME':
+            holidays_list = holidays.IT(years=df.index.year.unique()) # Retrieve holidays in Italy
+        if self.market == 'EPEX-DE':
+            holidays_list = holidays.DE(years=df.index.year.unique()) # Retrieve holidays in Germany
+
         df['daytype'] = 'working-day'
         df.loc[df.weekday == 'saturday', 'daytype'] = 'saturday'
         df.loc[df.weekday == 'sunday', 'daytype'] = 'holiday' # Flag Sundays as holidays
         df.loc[df.weekday == 'monday', 'daytype'] = 'monday'
-        df.loc[pd.Series(df.index.date, index=df.index).apply(lambda day: day in holidays_it), 'daytype'] = 'holiday'
+        df.loc[pd.Series(df.index.date, index=df.index).apply(lambda day: day in holidays_list), 'daytype'] = 'holiday'
 
         # Get dummy variables
         df = pd.get_dummies(df, columns=['daytype'], prefix='is')
