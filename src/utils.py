@@ -225,6 +225,14 @@ def get_inverse_function(x_values, y_values):
         - The caller is responsible for ensuring x_values and y_values are aligned and
           convertible to numeric arrays suitable for scipy.interpolate.interp1d.
     """
+    x_values = np.asarray(x_values)
+    y_values = np.asarray(y_values)
+
+    # Drop repeated y values, preserving order (safe for increasing or decreasing)
+    mask = np.concatenate(([True], np.diff(y_values) != 0))
+    x_values = x_values[mask]
+    y_values = y_values[mask]
+    
     assert is_strictly_monotonic(y_values)
     return interp1d(y_values, x_values, bounds_error=False, fill_value="extrapolate")
 
