@@ -6,18 +6,21 @@ set -euo pipefail
 # Usage info
 # ---------------------------
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-    echo "Usage: $0 [N_PARALLEL]"
+    echo "Usage: $0 [N_PARALLEL] [N_THREADS]"
     echo
     echo "Runs all forecast combinations in parallel."
-    echo "If N_PARALLEL is not provided, defaults to 8."
+    echo "  N_PARALLEL : number of parallel jobs (default: 8)"
+    echo "  N_THREADS  : OMP threads per job     (default: 1)"
+    echo
+    echo "Tip: set N_PARALLEL * N_THREADS <= total logical cores."
     exit 0
 fi
 
 # ---------------------------
 # HPC / threading settings
 # ---------------------------
-export OMP_NUM_THREADS=1        # Limit threading per Python process
-N_PARALLEL=${1:-8}              # Number of parallel jobs (default = 8)
+N_PARALLEL=${1:-8}
+N_THREADS=${2:-1}   # Threads per job — passed into each worker
 
 # ---------------------------
 # Activate Python environment
@@ -33,6 +36,7 @@ export MARKET="GME"
 export ENDOG_PATH=data/processed/"$MARKET"/sdts.pkl
 export EXOG_PATH=data/processed/"$MARKET"/predictors.csv
 export SAVE_FOLDER=data/output/"$MARKET"/curve_based/
+export N_THREADS   # Export so run_one can read it
 
 # ---------------------------
 # Define parameter arrays
@@ -50,6 +54,12 @@ TRANSFORMER=("fpca")
 run_one() {
     line="$1"
     read -r Ks Kd chK ac cc trans <<< "$line"
+
+    # Set threading for this job only
+    export OMP_NUM_THREADS="$N_THREADS"
+    export MKL_NUM_THREADS="$N_THREADS"
+    export NUMEXPR_NUM_THREADS="$N_THREADS"
+    export OPENBLAS_NUM_THREADS="$N_THREADS"
 
     python -m scripts.curve_based.point_forecast \
         --endog_path "$ENDOG_PATH" \
@@ -87,7 +97,17 @@ gen_combinations() {
 }
 
 # ---------------------------
+# Sanity check
+# ---------------------------
+TOTAL_CORES=$(nproc 2>/dev/null || sysctl -n hw.logicalcpu 2>/dev/null || echo "?")
+echo "[INFO] Logical cores available : $TOTAL_CORES"
+echo "[INFO] N_PARALLEL=$N_PARALLEL | N_THREADS=$N_THREADS | effective cores used: $((N_PARALLEL * N_THREADS))"
+if [[ "$TOTAL_CORES" != "?" && $((N_PARALLEL * N_THREADS)) -gt "$TOTAL_CORES" ]]; then
+    echo "[WARN] N_PARALLEL * N_THREADS exceeds available cores — expect oversubscription."
+fi
+
+# ---------------------------
 # Run all combinations in parallel
 # ---------------------------
-echo "[INFO] Running with N_PARALLEL=$N_PARALLEL ..."
+echo "[INFO] Running with N_PARALLEL=$N_PARALLEL, N_THREADS=$N_THREADS ..."
 gen_combinations | xargs -P "$N_PARALLEL" -I {} bash -c 'run_one "{}"'
