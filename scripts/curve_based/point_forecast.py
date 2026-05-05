@@ -115,19 +115,12 @@ def main(
 
     sd_pred = forecaster.fit_forecast_rolling(sd, exog, test_start_date, show_progress=show_progress)
 
-    prices_pred = sd_pred.get_clearing_prices()
-    prices_true = sd.get_clearing_prices()
-
     ### Save results ###
-    logging.info("MAE: {:.2f}€/MWh".format((prices_true - prices_pred).abs().mean()))
     curves_folder = join(save_folder, 'curves')
-    price_folder = join(save_folder, 'prices')
     forecasters_folder = join(save_folder, 'forecasters')
     os.makedirs(curves_folder, exist_ok=True)
-    os.makedirs(price_folder, exist_ok=True)
     os.makedirs(forecasters_folder, exist_ok=True)
     sd_pred.to_pickle(join(curves_folder, f'{run_name}.pkl'))
-    prices_pred.to_csv(join(price_folder, f'{run_name}.csv'), index=True)
     forecaster.to_pickle(join(forecasters_folder, f'{run_name}.pkl'))
 
     logging.info(f"Done.")
