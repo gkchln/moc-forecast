@@ -466,12 +466,6 @@ class ExogPreprocessor:
         else:
             df = exog_df.copy()
         df = df.loc[self.start_datetime:self.end_datetime, self.exog_variables]
-        
-        # Group the solar and wind variables (not per zone /!\)
-        solar_columns = [col for col in self.exog_variables if 'Solar' in col]
-        wind_columns = [col for col in self.exog_variables if 'Wind' in col]
-        df['RES'] = df[solar_columns].sum(axis=1) + df[wind_columns].sum(axis=1)
-        df.drop(solar_columns + wind_columns, axis=1, inplace=True)
 
         df = self.fill_hourly_nans_from_past_weeks(df)
         df = self._add_calendar_dummies(df)
