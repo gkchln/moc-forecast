@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from scipy.stats import norm
 from skfda.representation import FDataGrid
-from skfda.misc.metrics import l2_norm
+from skfda.misc.metrics import l1_norm, l2_norm
 from .utils import get_daily_df_from_hourly_series
 
 
@@ -134,8 +134,14 @@ def pit_empirical(observations: np.ndarray, samples: np.ndarray) -> np.ndarray:
 # Diebold-Mariano test
 # -------------------------
 
-def _functional_errors(fd_true, fd_pred):
-    return l2_norm(fd_true - fd_pred)
+def _functional_errors(fd_true, fd_pred, error_type):
+    res = fd_true - fd_pred
+    if error_type == "l1":
+        return l1_norm(res)
+    elif error_type == "l2":
+        return l2_norm(res)
+    else:
+        raise ValueError("error_type must be 'l1' or 'l2'")
 
 def _quantile_errors(y_true, q_pred):
     return crps(y_true, q_pred, return_avg=False)
@@ -179,6 +185,7 @@ def DM_test_functional(
         fd_true: FDataGrid,
         fd_pred_1: FDataGrid,
         fd_pred_2: FDataGrid,
+        error_type="l2",
         per_hour=False,
         return_errors=False,
         two_sided=False,
@@ -198,13 +205,13 @@ def DM_test_functional(
     Returns:
         float | tuple[float, pd.Series, pd.Series]: _description_
     """
-    errors_1 = _functional_errors(fd_true, fd_pred_1)
-    errors_2 = _functional_errors(fd_true, fd_pred_2)
+    errors_1 = _functional_errors(fd_true, fd_pred_1, error_type=error_type)
+    errors_2 = _functional_errors(fd_true, fd_pred_2, error_type=error_type)
 
     daily_1 = _dailyize_errors(errors_1, fd_true.sample_names, per_hour)
     daily_2 = _dailyize_errors(errors_2, fd_true.sample_names, per_hour)
 
-    _, p_value = _diebold_mariano_test(daily_1, daily_2, two_sided=False)
+    _, p_value = _diebold_mariano_test(daily_1, daily_2, two_sided=two_sided)
 
     return (p_value, daily_1, daily_2) if return_errors else p_value
 
