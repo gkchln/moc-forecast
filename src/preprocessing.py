@@ -352,7 +352,6 @@ class ExogPreprocessor:
     Args:
         start_date (datetime.date): Start date of the preprocessing period
         end_date (datetime.date): End date of the preprocessing period
-        exog_variables (list[str]): List of exogenous variables to include (see aliases in params.py)
     """
     def __init__(self, start_date: datetime.date, end_date: datetime.date, exog_variables: list[str], market: str, timezone: str = 'Europe/Rome'):
         self.timezone = timezone
@@ -361,8 +360,8 @@ class ExogPreprocessor:
         self.end_date = end_date
         self.end_datetime = pd.Timestamp(year=end_date.year, month=end_date.month, day=end_date.day, hour=23, tz=timezone)
         self.exog_variables = exog_variables
-        if market not in ['GME', 'EPEX-DE']:
-            raise ValueError("market should be 'GME' or 'EPEX-DE'")
+        if market not in ['GME', 'EPEX-DE-LU']:
+            raise ValueError("market should be 'GME' or 'EPEX-DE-LU'")
         self.market = market
 
 
