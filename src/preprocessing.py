@@ -37,7 +37,7 @@ class GMECurvesConstructor:
         self.n_prices = n_prices
         self.float_precision = float_precision
 
-    def _get_curve_steps(self, bids, date, hour, side):
+    def _get_curve_steps(self, bids: pd.DataFrame, date: int, hour: int, side: str):
         """
         Extracts and processes bid data for a specific date, hour, and type, returning cumulative quantities and prices.
         This method filters the input DataFrame for the specified date and hour, sorts the data based on price and type,
@@ -157,7 +157,7 @@ class GMECurvesConstructor:
         return f(xnew)
     
 
-    def get_curves_dataset(self, input_df, side, balance_df, progress_bar=True):
+    def get_curves_dataset(self, input_df: pd.DataFrame, side: str, balance_df: pd.DataFrame, price_grid: np.ndarray | None = None, progress_bar=True):
         """
         Generates a dataset of curve values over a specified domain for each unique (Data, Ora) pair in the input DataFrame.
 
