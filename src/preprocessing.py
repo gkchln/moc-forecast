@@ -180,14 +180,23 @@ class GMECurvesConstructor:
             - If `type` is 'OFF', import/export adjustments are applied to the curve steps.
         """
         if self.pool:
-            df = input_df[input_df.ZonaMercato == self.pool]
+            df = input_df.loc[input_df.Tipo == side & input_df.ZonaMercato == self.pool, :]
         else:
-            df = input_df.copy()
+            df = input_df.loc[input_df.Tipo == side, :]
 
         gme_hour_intervals = df[['Data', 'Ora']].drop_duplicates()
         timestamps = get_timestamp_from_gme_system(gme_hour_intervals)
         n = len(gme_hour_intervals)
-        grid_points = np.linspace(self.price_domain[0], self.price_domain[1], self.n_prices)
+
+
+        if price_grid is not None:
+            # Checking whether the provided price grid is coherent with the constructor object attributes
+            assert tuple(price_grid[[0, -1]]) == self.price_domain and len(price_grid) == self.n_prices
+            grid_points = price_grid.copy()
+        else:
+            # otherwise we build a classic uniform grid
+            grid_points = np.linspace(self.price_domain[0], self.price_domain[1], self.n_prices)
+
         data_matrix = np.zeros((n, self.n_prices))
         idx = 0
 
