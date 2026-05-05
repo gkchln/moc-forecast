@@ -6,21 +6,35 @@ set -euo pipefail
 # Usage info
 # ---------------------------
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-    echo "Usage: $0 [N_PARALLEL] [N_THREADS]"
+    echo "Usage: $0 MARKET TRANSFORMER K_SUPPLY K_DEMAND [N_PARALLEL] [N_THREADS]"
     echo
     echo "Runs all forecast combinations in parallel."
-    echo "  N_PARALLEL : number of parallel jobs (default: 8)"
-    echo "  N_THREADS  : OMP threads per job     (default: 1)"
+    echo "  MARKET      : market name (required)"
+    echo "  TRANSFORMER : space-separated list of transformers (required)"
+    echo "  K_SUPPLY    : space-separated list of K_supply values (required)"
+    echo "  K_DEMAND    : space-separated list of K_demand values (required)"
+    echo "  N_PARALLEL  : number of parallel jobs (default: 8)"
+    echo "  N_THREADS   : OMP threads per job     (default: 1)"
     echo
     echo "Tip: set N_PARALLEL * N_THREADS <= total logical cores."
+    echo "Example: $0 GME \"fpca zst\" \"2 3 4 5\" \"10 15\" 48 2"
     exit 0
 fi
 
 # ---------------------------
-# HPC / threading settings
+# Arguments
 # ---------------------------
-N_PARALLEL=${1:-8}
-N_THREADS=${2:-1}   # Threads per job — passed into each worker
+MARKET=${1:?          "Error: MARKET (arg 1) is required"}
+TRANSFORMER_ARG=${2:? "Error: TRANSFORMER (arg 2) is required"}
+K_SUPPLY_ARG=${3:?    "Error: K_SUPPLY (arg 3) is required"}
+K_DEMAND_ARG=${4:?    "Error: K_DEMAND (arg 4) is required"}
+N_PARALLEL=${5:-8}
+N_THREADS=${6:-1}
+
+# Convert space-separated strings to arrays
+read -ra TRANSFORMER <<< "$TRANSFORMER_ARG"
+read -ra K_SUPPLY <<< "$K_SUPPLY_ARG"
+read -ra K_DEMAND <<< "$K_DEMAND_ARG"
 
 # ---------------------------
 # Activate Python environment
@@ -41,12 +55,10 @@ export N_THREADS   # Export so run_one can read it
 # ---------------------------
 # Define parameter arrays
 # ---------------------------
-K_SUPPLY=(2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)
-K_DEMAND=(10)
+# Convert space-separated strings to arrays
 CHOICE_K=("none")
 AUTOCORR_STRUCTURE=("concurrent" "full")
 CROSSCORR_STRUCTURE=("none" "concurrent")
-TRANSFORMER=("fpca")
 
 # ---------------------------
 # Function executed by each parallel job
