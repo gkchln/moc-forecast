@@ -22,28 +22,24 @@ N_PARALLEL=${1:-8}              # Number of parallel jobs (default = 8)
 # ---------------------------
 # Activate Python environment
 # ---------------------------
-source ~/Projects/.venvs/moc_forecast/bin/activate
+source ../.venvs/moc_forecast/bin/activate
 
 # ---------------------------
 # Define static parameters
 # ---------------------------
 export START_DATE=20240101
 export END_DATE=20241231
-export ENDOG_PATH=data/processed/sdts.pkl
-export EXOG_PATH=data/source/exog.csv
-export SAVE_FOLDER=data/output/
+export MARKET="GME"
+export ENDOG_PATH=data/processed/"$MARKET"/sdts.pkl
+export EXOG_PATH=data/processed/"$MARKET"/predictors.csv
+export SAVE_FOLDER=data/output/"$MARKET"/curve_based/
 
 # ---------------------------
 # Define parameter arrays
 # ---------------------------
-# K_SUPPLY=(5 8 13)
-# K_DEMAND=(1 3 4)
-# AR_STRUCTURE=("concurrent" "full")
-# VAR_STRUCTURE=("none" "concurrent")
-# TRANSFORMER=("fpca" "zst")
-K_SUPPLY=(0)
-K_DEMAND=(0)
-CHOICE_K=("threshold-elbow" "threshold" "elbow")
+K_SUPPLY=(2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)
+K_DEMAND=(10)
+CHOICE_K=("none")
 AUTOCORR_STRUCTURE=("concurrent" "full")
 CROSSCORR_STRUCTURE=("none" "concurrent")
 TRANSFORMER=("fpca")
@@ -55,7 +51,7 @@ run_one() {
     line="$1"
     read -r Ks Kd chK ac cc trans <<< "$line"
 
-    python -m scripts.forecast_curves \
+    python -m scripts.curve_based.point_forecast \
         --endog_path "$ENDOG_PATH" \
         --exog_path "$EXOG_PATH" \
         --save_folder "$SAVE_FOLDER" \
