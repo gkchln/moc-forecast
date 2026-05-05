@@ -29,9 +29,8 @@ class GMECurvesConstructor:
         market (str, optional): The market type. Defaults to 'MGP'.
         qty_unit (str, optional): Quantity unit for curves. Defaults to 'GW'.
     """
-    def __init__(self, market='MGP', qty_unit='GW', pool=None, price_domain=(0, 300), n_prices=301,
+    def __init__(self, qty_unit='GW', pool=None, price_domain=(-500, 4000), n_prices=4501,
                  float_precision='float32'):
-        self.market = market
         self.qty_unit = qty_unit
         self.pool = pool
         self.price_domain = price_domain
