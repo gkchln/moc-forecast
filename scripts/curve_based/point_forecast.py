@@ -13,8 +13,14 @@ import argparse
 ### Fixed parameters ###
 
 LAGS_ENDOG = [1, 2, 3, 7]
-LAGS_EXOG = [0, 1, 7]
-EXOG_STRUCTURE = 'concurrent'
+EXOG_USE = {
+    'Load': {"lags": [0, 1, 7], "structure": "concurrent"},
+    'RES': {"lags": [0, 1, 7], "structure": "concurrent"},
+    'Gas': {"lags": [2], "structure": "concurrent"},
+    'Coal': {"lags": [2], "structure": "concurrent"},
+    'Oil': {"lags": [2], "structure": "concurrent"},
+    'CO2': {"lags": [2], "structure": "concurrent"}
+}
 CRITERION = 'aic'
 RANDOM_STATE = 42
 
@@ -36,13 +42,11 @@ def main(
     """Run the daily recalibration forecast pipeline."""
 
     ### Setup logging ###
-    run_name = "{autocorr_struc}_{crosscorr_struc}_{lags_endog}_{exog_struc}_{lags_exog}_{transformer}" \
+    run_name = "{autocorr_struc}_{crosscorr_struc}_{lags_endog}_{transformer}" \
     "_{K_supply}_{K_demand}_{choice_K}_{calib_wind}_{criterion}_{test_start}_{test_end}".format(
         autocorr_struc = str(autocorr_structure).lower()[:4], # 'conc' or 'full'
         crosscorr_struc = str(crosscorr_structure).lower()[:4], # 'conc', 'full' or 'none'
         lags_endog = ''.join(map(str, LAGS_ENDOG)), # e.g. '1237' for lags 1, 2, 3 and 7
-        exog_struc = str(EXOG_STRUCTURE).lower()[:4], # 'conc' or 'full'
-        lags_exog = ''.join(map(str, LAGS_EXOG)), # e.g. '017' for lags 0, 1 and 7
         transformer = transformer, # 'fpca' or 'zst'
         K_supply = K_supply or 'none',
         K_demand = K_demand or 'none',
@@ -92,10 +96,9 @@ def main(
     ### Forecast ###
     model = LassoVARX(
         lags_endog=LAGS_ENDOG,
-        lags_exog=LAGS_EXOG,
         autocorr_structure=autocorr_structure,
         crosscorr_structure=crosscorr_structure,
-        exog_structure=EXOG_STRUCTURE,
+        exog_use=EXOG_USE,
         calibration_window=calibration_window,
         criterion=CRITERION,
         random_state=RANDOM_STATE,
