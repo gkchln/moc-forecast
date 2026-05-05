@@ -46,7 +46,6 @@ source ../.venvs/moc_forecast/bin/activate
 # ---------------------------
 export START_DATE=20240101
 export END_DATE=20241231
-export MARKET="GME"
 export ENDOG_PATH=data/processed/"$MARKET"/sdts.pkl
 export EXOG_PATH=data/processed/"$MARKET"/predictors.csv
 export SAVE_FOLDER=data/output/"$MARKET"/curve_based/
