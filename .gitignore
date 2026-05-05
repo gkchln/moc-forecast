@@ -5,6 +5,9 @@ notebooks/
 results/
 documents/
 
+# HPC execution file
+*.pbs
+
 # Misc.
 .DS_Store
 
