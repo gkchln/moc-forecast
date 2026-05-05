@@ -391,6 +391,7 @@ def plot_hourly_avg_error(
         prices_pred: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
         forecast_type: str,
         models_order: list[str],
+        error_type_point="l1",
         savefig=False,
         path=None,
         figsize=(8, 4)
@@ -408,7 +409,7 @@ def plot_hourly_avg_error(
         for model in models_order:
             abs_errors = prices_pred[model] - prices_true
             hourly_avg_errors[model] = abs_errors.groupby(abs_errors.index.hour).apply(
-                lambda x: x.abs().mean()
+                lambda x: np.sqrt((x**2).mean()) if error_type_point == "l2" else x.abs().mean()
             )
 
     # Marker and linestyle cycles
@@ -430,11 +431,13 @@ def plot_hourly_avg_error(
             linewidth=1
         )
 
+    ylabel = 'RMSE [€/MWh]' if error_type_point == "l2" else 'MAE [€/MWh]'
+
     ax.set_xlabel('Hour of the day')
     if forecast_type == 'quantiles':
         ax.set_ylabel('Avg. CRPS')
     else:
-        ax.set_ylabel('MAE [€/MWh]')
+        ax.set_ylabel(ylabel)
     ax.legend()
     ax.grid(True, linestyle='--', alpha=0.5)
 
@@ -663,6 +666,7 @@ def plot_day_level_dm_test(
         true: FDataGrid | pd.Series,
         forecasts: Union[Dict[str, FDataGrid], Dict[str, pd.DataFrame], pd.DataFrame],
         scope: str,
+        error_type="l1",
         models_order=None,
         title=None,
         savefig=False,
@@ -687,6 +691,8 @@ def plot_day_level_dm_test(
             in ``true``.
         scope (str):
             scope of the DM test to be performed. It can be either 'functional', 'quantiles' or 'scalar'.
+        error_type (str, optional):
+            Type of error to be used in the DM test. Work only for scope 'scalar' and 'functional'. Defaults to "l1".
         models_order (list, optional):
             List that indicates the order in which the models should be displayed in the plot. Defaults to None.
         title (str, optional):
@@ -708,13 +714,13 @@ def plot_day_level_dm_test(
                 p_values.loc[model1, model2] = 1
             else:
                 if scope == 'functional':
-                    p_values.loc[model1, model2] = DM_test_functional(true, forecasts[model1], forecasts[model2],
+                    p_values.loc[model1, model2] = DM_test_functional(true, forecasts[model1], forecasts[model2], error_type=error_type,
                                                                       per_hour=False, return_errors=False, two_sided=False)
                 elif scope == 'quantiles':
                     p_values.loc[model1, model2] = DM_test_quantiles(true, forecasts[model1], forecasts[model2],
                                                                   per_hour=False, return_errors=False, two_sided=False)
                 else:
-                    p_values.loc[model1, model2] = DM_test_scalar(true, forecasts[model1], forecasts[model2],
+                    p_values.loc[model1, model2] = DM_test_scalar(true, forecasts[model1], forecasts[model2], error_type=error_type,
                                                                   per_hour=False, return_errors=False, two_sided=False)
 
     # Defining color map
