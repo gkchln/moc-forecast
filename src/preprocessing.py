@@ -279,14 +279,14 @@ class EPEXCurvesConstructor:
         return f(xnew)
     
 
-    def get_curves_dataset(self, input_df: pd.DataFrame, side: str, price_grid: np.ndarray | None = None, progress_bar=True):
+    def get_curves_dataset(self, input_df: pd.DataFrame, side: str, balance_df: None = None, price_grid: np.ndarray | None = None, progress_bar=True):
         """
         Generates a dataset of curve values over a specified domain for each unique (Data, Ora) pair in the input DataFrame.
 
         Args:
             input_df (pd.DataFrame): Input DataFrame containing at least 'Data', 'Ora', and 'ZonaMercato' columns.
             type (str): Type of curve to process (e.g., 'OFF', etc.).
-            balance_df (pd.DataFrame): DataFrame containing balance information for import/export adjustments.
+            balance_df (pd.DataFrame): Not used, only for compatibility
             progress_bar (bool, optional): Whether to display a progress bar during processing. Defaults to True.
 
         Returns:
