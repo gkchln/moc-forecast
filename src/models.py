@@ -75,7 +75,7 @@ class LassoVARX:
             Defaults to None.
         daytype_dummies (list[str], optional):
             Names of dummy variables in exogenous data that shouldn't be lagged or
-            considered in full structure. Defaults to ['is_holiday', 'is_monday', 'is_saturday'].
+            considered in full structure. Defaults to ['is_Holiday', 'is_Monday', 'is_Saturday'].
         calibration_window (datetime.timedelta, optional):
             Time span of historical data used for model calibration.
             Defaults to datetime.timedelta(days=364).
@@ -103,7 +103,7 @@ class LassoVARX:
             exog_use: dict[str, dict[str, list[int] | str]] | None = None,
             autocorr_structure: str = 'concurrent',
             crosscorr_structure: str | None = None,
-            daytype_dummies: list[str] = ['is_holiday', 'is_monday', 'is_saturday'],
+            daytype_dummies: list[str] = ['is_Holiday', 'is_Monday', 'is_Saturday'],
             calibration_window: datetime.timedelta = datetime.timedelta(days=364),
             criterion: str = 'aic',
             max_iter: int = 2500,
