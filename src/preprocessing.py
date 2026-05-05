@@ -59,13 +59,16 @@ class GMECurvesConstructor:
         if date >= 20250101:
             df = df.loc[df.TIPO_OFFERTA != 'B'] # Remove block orders
 
-        df.loc[:, '_sorting'] = df.Prezzo
-        df.loc[df.Tipo == 'BID', '_sorting'] = -df._sorting
-        df.sort_values(by=['Tipo', '_sorting'], inplace=True)
+        if side == 'BID':
+            df.loc[:, '_sorting'] = -df.Prezzo
+        else:
+            df.loc[:, '_sorting'] = df.Prezzo
 
-        df['cumQuantita'] = df.groupby('Tipo')['Quantita'].cumsum()
+        df.sort_values(by='_sorting', inplace=True)
+
+        df['cumQuantita'] = df['Quantita'].cumsum()
         
-        return df.loc[df.Tipo == side, ['cumQuantita', 'Prezzo']]
+        return df.loc[:, ['cumQuantita', 'Prezzo']]
     
 
     def _add_import_export(self, steps, balance_df, date, hour):
