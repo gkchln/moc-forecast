@@ -124,6 +124,7 @@ class ZielSteinertTransformer:
         Q_grid = np.linspace(Qmin, Qmax, self.n_classes)
         return Q_grid
     
+    
     def _get_class_bounds(self, mean_curve: FDataGrid, Q_grid: np.ndarray) -> np.ndarray:
         """Computes price class boundaries by inverting the mean cumulative curve.
 
@@ -137,6 +138,12 @@ class ZielSteinertTransformer:
         x_values, y_values = mean_curve.grid_points[0], mean_curve.data_matrix[0, :, 0]
         inverse_mean = get_inverse_function(x_values, y_values)
         class_bounds = inverse_mean(Q_grid)
+
+        # Snap to nearest superior grid point
+        idx = np.searchsorted(x_values, class_bounds)
+        idx = np.clip(idx, 0, len(x_values) - 1)
+        class_bounds = x_values[idx]
+
         # HOTFIX for ensuring the extreme class bounds correspond to the extremes of price_grid
         if self.side == 'demand':
             class_bounds[0] = x_values[-1]
@@ -144,7 +151,9 @@ class ZielSteinertTransformer:
         else:
             class_bounds[0] = x_values[0]
             class_bounds[-1] = x_values[-1]
+
         return class_bounds
+    
     
     @staticmethod
     def _get_class_qty(curves: FDataGrid, class_bounds: np.ndarray) -> np.ndarray:
@@ -204,10 +213,23 @@ class ZielSteinertTransformer:
             mean_qty[1:] = np.diff(mean_cum_qty)
         class_mean_qty = Q_grid.copy()
         class_mean_qty[1:] = np.diff(Q_grid)
-        # The following step creates a 1d array of length len(price_grid) where at index i we have the
-        # total mean quantity of the class price_grid[i] belongs to
-        class_mean_qty = class_mean_qty[self._get_class_membership(price_grid, class_bounds)]
-        return mean_qty / class_mean_qty
+
+        # Map each price grid point to its class index
+        membership = self._get_class_membership(price_grid, class_bounds)
+        class_mean_qty_per_price = class_mean_qty[membership] # For each price point, retrieve the total mean quantity of its class
+
+        # When two successive Q_grid values are equal after snapping (which happens with
+        # large n_classes), a class has zero total quantity. In that case weights cannot
+        # be derived from mean_qty, so we fall back to uniform weights (1 / class_size) for all prices in that class
+        zero_classes = class_mean_qty == 0
+        zero_mask = zero_classes[membership]
+        class_sizes = np.array([(membership == k).sum() for k in range(len(class_mean_qty))])
+        uniform_weights = (1 / class_sizes)[membership]
+
+        # Use normal weights where class_mean_qty > 0, uniform weights otherwise.
+        # The np.where on the denominator avoids division by zero before branch selection.
+        weights = np.where(zero_mask, uniform_weights, mean_qty / np.where(zero_mask, 1, class_mean_qty_per_price))
+        return weights
     
 
     def fit(self, curves: FDataGrid) -> "ZielSteinertTransformer":
@@ -221,8 +243,9 @@ class ZielSteinertTransformer:
         """
         self.price_grid_ = curves.grid_points[0]
         self.mean_curve_ = curves.mean()
-        self.Q_grid_ = self._get_qty_grid(self.mean_curve_)
-        self.class_bounds_ = self._get_class_bounds(self.mean_curve_, self.Q_grid_)
+        exact_Q_grid = self._get_qty_grid(self.mean_curve_)
+        self.class_bounds_ = self._get_class_bounds(self.mean_curve_, exact_Q_grid)
+        self.Q_grid_ = self.mean_curve_(self.class_bounds_)[0, :, 0]
         return self
     
     
