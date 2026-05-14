@@ -14,8 +14,8 @@ from src.models import LassoVARX
 
 LAGS_ENDOG = [1, 2, 3, 7]
 EXOG_USE = {
-    'Load': {"lags": [0, 1, 7], "structure": "concurrent"},
-    'RES': {"lags": [0, 1, 7], "structure": "concurrent"},
+    'Load': {"lags": [0, 1, 7], "structure": "{exog_structure}"},
+    'RES': {"lags": [0, 1, 7], "structure": "{exog_structure}"},
     'Gas': {"lags": [2], "structure": "concurrent"},
     'Coal': {"lags": [2], "structure": "concurrent"},
     'Oil': {"lags": [2], "structure": "concurrent"},
@@ -23,6 +23,14 @@ EXOG_USE = {
 }
 CRITERION = 'aic'
 RANDOM_STATE = 42
+
+def _format_exog_use(exog_structure):
+    exog_use = {}
+    for key, value in EXOG_USE.items():
+        exog_use[key] = value
+        exog_use[key]['structure'] = value['structure'].format(exog_structure = exog_structure)
+    return exog_use
+
 
 def main(
         endog_path,
@@ -93,7 +101,7 @@ def main(
         lags_endog=LAGS_ENDOG,
         autocorr_structure=autocorr_structure,
         crosscorr_structure=crosscorr_structure,
-        exog_use=EXOG_USE,
+        exog_use=_format_exog_use(exog_structure),
         calibration_window=calibration_window,
         criterion=CRITERION,
         random_state=RANDOM_STATE,
