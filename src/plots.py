@@ -16,7 +16,7 @@ from statsmodels.nonparametric.smoothers_lowess import lowess
 from skfda.representation import FDataGrid
 from skfda.exploratory.visualization import FPCAPlot
 from skfda.preprocessing.dim_reduction import FPCA
-from skfda.misc.scoring import r2_score
+from skfda.misc.scoring import r2_score, mean_absolute_error, mean_squared_error, mean_absolute_percentage_error
 
 from .curves import SupplyDemandFPCA, SupplyDemandTimeSeries
 from .forecasters import SupplyDemandForecaster
@@ -294,9 +294,10 @@ def plot_dynamic_fpcs(
 # Curves plots
 # -------------------------
 
-def plot_r2_score(
+def plot_functional_performance_metric(
         curves_pred: Dict[str, SupplyDemandTimeSeries],
         curves_true: SupplyDemandTimeSeries,
+        metric: str = 'mae',
         models_order: list[str] | None = None,
         models_style: Dict[str, Dict[str, Any]] = None,
         figsize: Tuple[int, int] = (8, 3),
@@ -312,19 +313,37 @@ def plot_r2_score(
         models = curves_pred.keys()
 
     for model in models:
-        score_supply = r2_score(curves_true.supply, curves_pred[model].supply, multioutput='raw_values')
-        score_demand = r2_score(curves_true.demand, curves_pred[model].demand, multioutput='raw_values')
+
+        if metric == 'mae':
+            score_supply = mean_absolute_error(curves_true.supply, curves_pred[model].supply, multioutput='raw_values')
+            score_demand = mean_absolute_error(curves_true.demand, curves_pred[model].demand, multioutput='raw_values')
+            axes[0].set_ylabel('MAE [GWh]')
+        elif metric == 'rmse':
+            score_supply = np.sqrt(mean_squared_error(curves_true.supply, curves_pred[model].supply, multioutput='raw_values'))
+            score_demand = np.sqrt(mean_squared_error(curves_true.demand, curves_pred[model].demand, multioutput='raw_values'))
+            axes[0].set_ylabel('RMSE [GWh]')
+        elif metric == 'mape':
+            score_supply = 100 * mean_absolute_percentage_error(curves_true.supply, curves_pred[model].supply, multioutput='raw_values')
+            score_demand = 100 * mean_absolute_percentage_error(curves_true.demand, curves_pred[model].demand, multioutput='raw_values')
+            axes[0].set_ylabel('MAPE [%]')
+        elif metric == 'r2':
+            score_supply = r2_score(curves_true.supply, curves_pred[model].supply, multioutput='raw_values')
+            score_demand = r2_score(curves_true.demand, curves_pred[model].demand, multioutput='raw_values')
+            axes[0].set_ylabel('$R^2$')
+        else:
+            raise ValueError(f"Metric should be either 'mae', 'rmse', 'mape' or 'r2'. Got: '{metric}'")
+        
         if models_style:
             style = models_style[model]
             kwargs = {'color': style['color'], 'linestyle': style['linestyle']}
         else:
             kwargs = {}
+
         score_supply.plot(axes=axes[0], label=model, **kwargs)
         score_demand.plot(axes=axes[1], label=model, **kwargs)
 
     axes[0].set_title('Supply')
     axes[1].set_title('Demand')
-    axes[0].set_ylabel('$R^2$ score')
     axes[0].set_xlabel('Price [€/MWh]')
     axes[1].set_xlabel('Price [€/MWh]')
     axes[0].grid(True, linestyle='--', alpha=0.5)
