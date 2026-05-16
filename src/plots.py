@@ -92,6 +92,39 @@ def format_heatmap_latex_table(
     return latex_rows
 
 
+def format_heatmap_df(df, decimals, invert_cmap=False, per_column=True):
+    if isinstance(decimals, int):
+        decimals = dict(zip(df.columns, [decimals] * df.shape[1]))
+
+    def get_color(val, min_val, max_val):
+        norm = (val - min_val) / (max_val - min_val)
+        if invert_cmap:
+            norm = 1 - norm
+        if norm < 0.5:
+            t = norm / 0.5
+            r = int(218 + t * (248 - 218))
+            g = int(134 + t * (215 - 134))
+            b = int(118 + t * (120 - 118))
+        else:
+            t = (norm - 0.5) / 0.5
+            r = int(248 + t * (113 - 248))
+            g = int(215 + t * (185 - 215))
+            b = int(120 + t * (142 - 120))
+        return f"background-color: rgb({r},{g},{b})"
+
+    def style_func(df):
+        styles = pd.DataFrame("", index=df.index, columns=df.columns)
+        for col in df.columns:
+            min_val = df[col].min() if per_column else df.min(axis=None)
+            max_val = df[col].max() if per_column else df.max(axis=None)
+            for idx in df.index:
+                styles.loc[idx, col] = get_color(df.loc[idx, col], min_val, max_val)
+        return styles
+
+    fmt = {col: f"{{:.{decimals[col]}f}}" for col in df.columns}
+    return df.style.apply(style_func, axis=None).format(fmt)
+
+
 
 
 # -------------------------
