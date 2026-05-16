@@ -3,13 +3,22 @@ import argparse
 import pandas as pd
 from skfda import FDataGrid
 import numpy as np
+import os
 
 from src.preprocessing import GMECurvesConstructor, EPEXCurvesConstructor
 from src.curves import SupplyDemandTimeSeries
 from src.curves import ZielSteinertTransformer
 
-PRICE_DOMAIN = (-500, 4000)
-N_PRICES_INITIAL = 4500 # Initial optimized price grid size for supply and demand
+FULL_PRICE_DOMAIN = (-500, 4000)
+
+RESTRICTED_PRICE_DOMAIN = {
+    'GME': (0, 300),
+    'EPEX-DE-LU': (-500, 1000),
+    'EPEX-FR': (-200, 300)
+}
+
+RESOLUTION = 1 # resolution for the uniform price grid in €/MWh 
+
 
 def _get_price_grid_one_side(sd: SupplyDemandTimeSeries, side: str, n_prices: int):
     if side == 'supply':
@@ -43,7 +52,7 @@ def build_curves(preprocessor: GMECurvesConstructor | EPEXCurvesConstructor, bid
     )
 
 
-def main(bids_path: str, output_path: str, market: str, coupling_path=None):
+def main(bids_path: str, output_path: str, market: str, coupling_path=None, restrict=False, optimize_grid=False):
     if market == 'GME' and coupling_path is None:
         raise ValueError("coupling_math must be provided when market is 'GME'")
 
@@ -54,8 +63,15 @@ def main(bids_path: str, output_path: str, market: str, coupling_path=None):
     else:
         coupling = None
 
-    if market == 'EPEX-DE-LU':
-        preprocessor = EPEXCurvesConstructor(price_domain=PRICE_DOMAIN, n_prices=4501)
+    if restrict:
+        price_domain = RESTRICTED_PRICE_DOMAIN[market]
+    else:
+        price_domain = FULL_PRICE_DOMAIN
+
+    n_prices = int((price_domain[1] - price_domain[0]) / RESOLUTION + 1)
+
+    if market in ['EPEX-DE-LU', 'EPEX-FR']:
+        preprocessor = EPEXCurvesConstructor(price_domain=price_domain, n_prices=n_prices)
         bids.rename({
             'T': 'timestamp',
             'S': 'side',
@@ -65,33 +81,37 @@ def main(bids_path: str, output_path: str, market: str, coupling_path=None):
         bids['side'] = bids.side.map({'Offer': 'OFF', 'Bid': 'BID'})
 
     elif market == 'GME':
-        preprocessor = GMECurvesConstructor(price_domain=PRICE_DOMAIN, n_prices=4501)
+        preprocessor = GMECurvesConstructor(price_domain=price_domain, n_prices=n_prices)
 
     else:
-        raise ValueError("Accepted markets are either 'GME' or 'EPEX-DE-LU'")
+        raise ValueError("Accepted markets are either 'GME', 'EPEX-DE-LU' or 'EPEX-FR")
 
     
     # First build "heavy" version of curves with uniform price grid
-    print(f"==== Start building curves with uniform grid price ====")
+    print(f"==== Start building curves with uniform price grid of size {n_prices} on domain {price_domain} ====")
 
     price_grid = None
     sd = build_curves(preprocessor, bids, price_grid, coupling)
 
-    output_path_full = f"{output_path.split('.')[0]}_full.pkl"
-    sd.to_pickle(output_path_full)
-    print(f"Successfully saved curves with uniform price grid at {output_path_full}.")
-
-    # Second build also a "light" version of curves with optimized price grid using ZST
-    print(f"\n==== Start building curves with optimized grid price ====")
-    print(f"Initial optimized price grid size for supply and demand: {N_PRICES_INITIAL}")
-    price_grid = get_price_grid(sd, N_PRICES_INITIAL)
-    preprocessor.n_prices = len(price_grid)
-    print(f"Final optimized price grid size common to supply and demand is: {len(price_grid)}")
-
-    sd = build_curves(preprocessor, bids, price_grid, coupling)
-
+    dirname = os.path.dirname(output_path)
+    os.makedirs(dirname, exist_ok=True)
     sd.to_pickle(output_path)
-    print(f"Successfully saved curves with optimized price grid price at {output_path}")
+    print(f"Successfully saved curves with uniform price grid at {output_path}.")
+
+    if optimize_grid:
+        # Second build also a "light" version of curves with optimized price grid using ZST
+        print(f"\n==== Start building curves with optimized grid price ====")
+        price_grid = get_price_grid(sd, n_prices)
+        preprocessor.n_prices = len(price_grid)
+        print(f"Final optimized price grid size common to supply and demand is: {len(price_grid)}")
+
+        sd = build_curves(preprocessor, bids, price_grid, coupling)
+        
+        output_path_opt = f"{output_path.split('.')[0]}_opt.pkl"
+        dirname = os.path.dirname(output_path_opt)
+        os.makedirs(dirname, exist_ok=True)
+        sd.to_pickle(output_path_opt)
+        print(f"Successfully saved curves with optimized price grid price at {output_path_opt}")
 
 
 
@@ -102,6 +122,8 @@ if __name__ == '__main__':
     parser.add_argument('output_path', help='Path to save curves pickle file')
     parser.add_argument('--market', help='Market concerned', required=True)
     parser.add_argument('--coupling_path', help='Path to coupling CSV file')
+    parser.add_argument('--restrict', help='Whether to restrict the curves (restricted domain hard-coded in the script)', action="store_true")
+    parser.add_argument('--optimize_grid', help='Wether or not to bid optimal non-uniform price grid', action="store_true")
     
     args = parser.parse_args()
-    main(args.bids_path, args.output_path, args.market, args.coupling_path)
+    main(args.bids_path, args.output_path, args.market, args.coupling_path, args.restrict, args.optimize_grid)
