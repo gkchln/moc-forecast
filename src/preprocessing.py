@@ -230,15 +230,15 @@ class GMECurvesConstructor:
 
 class EPEXCurvesConstructor:
     """
-    Class to handle GME curves preprocessing.
+    Class to handle EPEX curves preprocessing.
     Args:
         market (str, optional): The market type. Defaults to 'MGP'.
         qty_unit (str, optional): Quantity unit for curves. Defaults to 'GW'.
     """
-    def __init__(self, qty_unit='GW', price_domain=(-500, 1000), n_prices=1501, float_precision='float32'):
-        self.qty_unit = qty_unit
+    def __init__(self, price_domain=(-500, 1000), n_prices=1501, qty_unit='GW', float_precision='float32'):
         self.price_domain = price_domain
         self.n_prices = n_prices
+        self.qty_unit = qty_unit
         self.float_precision = float_precision
     
     def _get_qty_function(self, steps, xnew, side):
@@ -360,8 +360,8 @@ class ExogPreprocessor:
         self.end_date = end_date
         self.end_datetime = pd.Timestamp(year=end_date.year, month=end_date.month, day=end_date.day, hour=23, tz=timezone)
         self.exog_variables = exog_variables
-        if market not in ['GME', 'EPEX-DE-LU']:
-            raise ValueError("market should be 'GME' or 'EPEX-DE-LU'")
+        if market not in ['GME', 'EPEX-DE-LU', 'EPEX-FR']:
+            raise ValueError("market should be 'GME', 'EPEX-DE-LU' or 'EPEX-FR'")
         self.market = market
 
 
@@ -426,6 +426,8 @@ class ExogPreprocessor:
             holidays_list = holidays.IT(years=df.index.year.unique()) # Retrieve holidays in Italy
         if self.market == 'EPEX-DE-LU':
             holidays_list = holidays.DE(years=df.index.year.unique()) # Retrieve holidays in Germany
+        if self.market == 'EPEX-FR':
+            holidays_list = holidays.FR(years=df.index.year.unique()) # Retrieve holidays in France
 
         df['daytype'] = 'Working-day'
         df.loc[df.weekday == 'Saturday', 'daytype'] = 'Saturday'
