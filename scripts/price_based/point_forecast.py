@@ -16,6 +16,8 @@ LAGS_ENDOG = [1, 2, 3, 7]
 EXOG_USE = {
     'Load': {"lags": [0, 1, 7], "structure": "{exog_structure}"},
     'RES': {"lags": [0, 1, 7], "structure": "{exog_structure}"},
+    'NTC FR > IT': {"lags": [0, 1, 7], "structure": "{exog_structure}"},
+    'NTC CH > IT': {"lags": [0, 1, 7], "structure": "{exog_structure}"},
     'Gas': {"lags": [2], "structure": "concurrent"},
     'Coal': {"lags": [2], "structure": "concurrent"},
     'Oil': {"lags": [2], "structure": "concurrent"},
