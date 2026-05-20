@@ -1,10 +1,16 @@
+from typing import Dict
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+from os.path import join
+from tqdm import trange
 from scipy.stats import norm
+from sklearn.metrics import root_mean_squared_error, mean_absolute_error, r2_score
+from skfda.misc.scoring import r2_score as fr2, mean_absolute_error as fmae, mean_squared_error as fmse, mean_absolute_percentage_error as fmape
 from skfda.representation import FDataGrid
 from skfda.misc.metrics import l1_norm, l2_norm
 from .utils import get_daily_df_from_hourly_series
+from .curves import SupplyDemandTimeSeries, load_sdts
 
 
 # -------------------------
@@ -285,4 +291,53 @@ def DM_test_scalar(
     _, p_value = _diebold_mariano_test(daily_1, daily_2, two_sided=two_sided)
 
     return (p_value, daily_1, daily_2) if return_errors else p_value
+
+
+# -------------------------------
+# Sensitivity to nb of components
+# -------------------------------
+
+
+def compute_performance_per_nb_of_components(curves_based_folder: str, model_runs: Dict, sd_true: SupplyDemandTimeSeries, side: str, max_n_components: int = 20):
+    mae, rmse, mape, r2, mae_mcp, rmse_mcp, r2_mcp = (
+        {model: [] for model in model_runs.keys()} for _ in range(7)
+    )
+
+    prices_true = sd_true.get_clearing_prices()
+
+    for n_components in trange(1, max_n_components+1):
+        for model, run in model_runs.items():
+            try:
+                sd_pred = load_sdts(join(curves_based_folder, 'curves', run.format(n_components) + '.pkl'))
+
+                if side == 'demand':
+                    y_true = sd_true.demand
+                    y_pred = sd_pred.demand
+                else:
+                    y_true = sd_true.supply
+                    y_pred = sd_pred.supply
+
+                mae[model].append(fmae(y_true, y_pred))
+                rmse[model].append(np.sqrt(fmse(y_true, y_pred)))
+                mape[model].append(100*fmape(y_true, y_pred))
+                r2[model].append(fr2(y_true, y_pred))
+                prices_pred = sd_pred.get_clearing_prices()
+                mae_mcp[model].append(mean_absolute_error(prices_true, prices_pred))
+                rmse_mcp[model].append(root_mean_squared_error(prices_true, prices_pred))
+                r2_mcp[model].append(r2_score(prices_true, prices_pred))
+                
+            except FileNotFoundError as e:
+                mae[model].append(np.nan)
+                rmse[model].append(np.nan)
+                mape[model].append(np.nan)
+                r2[model].append(np.nan)
+                mae_mcp[model].append(np.nan)
+                rmse_mcp[model].append(np.nan)
+                r2_mcp[model].append(np.nan)
+                if 'ZST' not in model or n_components > 1: # Models with ZST and n_components=1 are not defined so no need to warn
+                    print(e)
+
+    idx = pd.Index(range(1, max_n_components+1), name=f'$K_{side[0]}$')
+
+    return (pd.DataFrame(d, index=idx) for d in [mae, rmse, mape, r2, mae_mcp, rmse_mcp, r2_mcp])
 
