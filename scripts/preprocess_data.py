@@ -2,6 +2,7 @@ import os
 import pandas as pd
 from src.utils import fix_daylight_saving_time
 from src.preprocessing import ExogPreprocessor
+from src.curves import load_sdts
 
 
 preprocess_start = '2022-12-25 00:00:00'
@@ -9,6 +10,7 @@ test_end = '2024-12-31 23:00:00'
 
 mgp_prices_path = 'data/source/GME/MGP_prices.csv'
 entsoe_path = 'data/source/ENTSOE.csv'
+lseg_path = 'data/source/LSEG/RES-forecast.csv'
 invest_paths = {
     'Gas': 'data/source/ICE Dutch TTF Natural Gas Futures Historical Data.csv',
     'Coal': 'data/source/Coal (API2) CIF ARA (ARGUS-McCloskey) Futures Historical Data.csv',
@@ -16,6 +18,8 @@ invest_paths = {
     'CO2': 'data/source/European Union Carbon Permits Allowance (EUA) Yearly Futures Historical Data.csv',
     'USD_EUR': 'data/source/USD_EUR Historical Data.csv'
 }
+curves_path = 'data/processed/{market}/sdts.pkl'
+outpath = 'data/processed/{market}/predictors.csv'
 
 market_zone_map = {
     'GME': 'IT',
@@ -56,6 +60,9 @@ for market in ['EPEX-DE-LU', 'EPEX-FR', 'GME']:
 entsoe = pd.read_csv(entsoe_path, index_col=0, parse_dates=True)
 entsoe.index = pd.to_datetime(entsoe.index, utc=True).tz_convert("Europe/Rome")
 
+# LSEG
+lseg = pd.read_csv(lseg_path, index_col=0, parse_dates=True)
+lseg.index = pd.to_datetime(lseg.index, utc=True).tz_convert("Europe/Rome")
 
 # Investing.com
 invest_df_dict = {}
@@ -134,16 +141,8 @@ for market in ['GME', 'EPEX-DE-LU', 'EPEX-FR']:
 ### Prices ###
 ##############
 
-# GME
-prices = pd.read_csv(mgp_prices_path, index_col=0, parse_dates=True)
-prices.index = pd.to_datetime(prices.index, utc=True).tz_convert("Europe/Rome")
-prices = fix_daylight_saving_time(prices)
-prices = prices.loc[preprocess_start:test_end, ['NAT']]
-prices.rename({'NAT': 'Price'}, axis=1, inplace=True)
-prices.to_csv('data/processed/GME/price.csv')
-
-# EPEX-DE-LU
-prices = entsoe[['Price DE_LU']].rename({'Price DE_LU': 'Price'}, axis=1)
-prices = fix_daylight_saving_time(prices)
-prices = prices.loc[preprocess_start:test_end, :]
-prices.to_csv('data/processed/EPEX-DE-LU/price.csv')
+for market in ['EPEX-DE-LU', 'EPEX-FR', 'GME']:
+    sd = load_sdts(curves_path.format(market=market))
+    prices = sd.get_clearing_prices()
+    prices.name = 'Price'
+    prices.to_csv(f'data/processed/{market}/price.csv')
