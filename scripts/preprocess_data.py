@@ -19,30 +19,31 @@ invest_paths = {
 
 market_zone_map = {
     'GME': 'IT',
-    'EPEX-DE-LU': 'DE_LU'
+    'EPEX-DE-LU': 'DE_LU',
+    'EPEX-FR': 'FR'
 }
 
 exog_variables = {
     'EPEX-DE-LU': [
         'Load DE_LU',
-        'RES DE_LU',
-        'Gas',
-        'Coal',
-        'Oil',
-        'CO2'
+        'RES DE_LU'
+    ],
+
+    'EPEX-FR': [
+        'Load FR',
+        'RES FR',
+        'NTC FR > IT'
     ],
 
     'GME': [
         'Load IT',
         'RES IT',
-        'Gas',
-        'Coal',
-        'Oil',
-        'CO2'
+        'NTC FR > IT',
+        'NTC CH > IT'
     ]
 }
 
-for market in ['EPEX-DE-LU', 'GME']:
+for market in ['EPEX-DE-LU', 'EPEX-FR', 'GME']:
     os.makedirs(f'data/processed/{market}', exist_ok=True)
 
 
@@ -76,23 +77,26 @@ invest_df.index = invest_df.index.to_timestamp().date
 
 
 # Combine and create two separate dataframes for each market
-exog = entsoe.drop("Price DE_LU", axis=1)
+exog = entsoe.drop(["Price DE_LU", "Price FR"], axis=1)
+for col in lseg.columns:
+    exog[col] = lseg[col]
 for col in invest_df.columns:
     exog[col] = [invest_df[col].get(ts.date()) for ts in exog.index]
 
 exog.rename({
     'Forecasted Load DE_LU': 'Load DE_LU',
     'Forecasted Load IT': 'Load IT',
+    'Forecasted Load FR': 'Load FR',
 }, axis=1, inplace=True)
 
-for zone in ['DE_LU', 'IT']:
+for zone in ['DE_LU', 'IT', 'FR']:
     # Sum the solar and wind (onshore + offshore for EPEX-DE-LU) variables
-    solar_columns = [col for col in entsoe.columns if ("Solar" in col) and (zone in col)]
-    wind_columns = [col for col in entsoe.columns if ("Wind" in col) and (zone in col)]
+    solar_columns = [col for col in exog.columns if ("Solar" in col) and (zone in col)]
+    wind_columns = [col for col in exog.columns if ("Wind" in col) and (zone in col)]
     exog[f'RES {zone}'] = exog[solar_columns].sum(axis=1) + exog[wind_columns].sum(axis=1)
     exog.drop(solar_columns + wind_columns, axis=1, inplace=True)
 
-for market in ['GME', 'EPEX-DE-LU']:
+for market in ['GME', 'EPEX-DE-LU', 'EPEX-FR']:
     # Some preprocessing is done inside this class
     exogprep = ExogPreprocessor(
         start_date=pd.to_datetime(preprocess_start).date(),
