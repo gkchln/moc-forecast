@@ -108,8 +108,19 @@ for market in ['GME', 'EPEX-DE-LU', 'EPEX-FR']:
     zone = market_zone_map[market]
     predictors.rename({f'Load {zone}': 'Load', f'RES {zone}': 'RES'}, axis=1, inplace=True)
     # Divide volumes by 1000 to have GW instead of MW
-    predictors[['Load', 'RES']] = predictors[['Load', 'RES']] / 1000
-    predictors.to_csv(f'data/processed/{market}/predictors.csv', index=True)
+    vol_cols = [col for col in predictors.columns if (col in ['Load', 'RES'] or 'NTC' in col)]
+    predictors[vol_cols] = predictors[vol_cols] / 1000
+    path = outpath.format(market=market)
+
+    if market in ['EPEX-DE-LU', 'EPEX-FR']:
+        predictors.loc['2024-06-26'] = predictors.loc['2024-06-25'].values
+        print(f"Patched: 2024-06-26 predictor values for {market} replaced by 2024-06-25 values to match EPEX curves patch.")
+
+    predictors.to_csv(path, index=True)
+    # Also save a version with only Load, RES and day type dummies for LEAR model
+    load_res_dummy_cols = ['Load', 'RES'] + exogprep.dummy_columns
+    path_lear = path.split('.')[0] + '_LEAR.csv'
+    predictors[load_res_dummy_cols].to_csv(path_lear, index=True)
 
 
 
