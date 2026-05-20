@@ -3,6 +3,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
+import matplotlib.ticker as ticker
+from matplotlib.legend_handler import HandlerTuple
 from cycler import cycler
 import datetime as dt
 import pandas as pd
@@ -429,6 +431,99 @@ def plot_curves_price_prediction(
         plt.savefig(path, dpi=300, bbox_inches='tight')
     else:
         plt.show()
+
+    return fig
+
+
+
+def plot_performance_per_nb_of_components(
+        error_df: pd.DataFrame,
+        metric: str = 'mae',
+        models_order: list[str] | None = None,
+        models_style: Dict[str, Dict[str, Any]] = None,
+        base_n_comp: Dict[str, int] | None = None,
+        figsize: Tuple[int, int] = (8, 3),
+        nrows_legend: int = 1,
+        savefig: bool = False,
+        path: str | None = None
+    ):
+    fig, ax = plt.subplots(figsize=figsize)
+
+    if models_order:
+        models = models_order
+    else:
+        models = error_df.keys()
+
+    linestyle_to_marker = {'-': 'o', '--': 'D', ':': '^', '-.': 's'}
+
+    for model in models:
+
+        if metric == 'mae':
+            ax.set_ylabel('MAE [GWh]')
+        elif metric == 'rmse':
+            ax.set_ylabel('RMSE [GWh]')
+        elif metric == 'mape':
+            ax.set_ylabel('MAPE [%]')
+        elif metric == 'r2':
+            ax.set_ylabel('$R^2$')
+        elif metric == 'mae_mcp':
+            ax.set_ylabel('MAE [€/MWh]')
+        elif metric == 'rmse_mcp':
+            ax.set_ylabel('RMSE [€/MWh]')
+        elif metric == 'r2_mcp':
+            ax.set_ylabel('$R^2$')
+        else:
+            raise ValueError(f"Metric should be either 'mae', 'mse', 'mape', 'r2', 'mae_mcp', 'rmse_mcp', 'r2_mcp'. Got: '{metric}'")
+
+        if models_style:
+            style = models_style[model]
+            kwargs = {'color': style['color'], 'linestyle': style['linestyle']}
+        else:
+            kwargs = {}
+
+        error_df[model].plot(ax=ax, label=model, marker=None, **kwargs)
+
+        if base_n_comp and model in base_n_comp:
+            n_comp = base_n_comp[model]
+            y_val = error_df[model].loc[n_comp]
+            linestyle = kwargs.get('linestyle', '-')
+            marker = linestyle_to_marker.get(linestyle, 'o')
+            ax.plot(n_comp, y_val,
+                    color=kwargs.get('color', None),
+                    marker=marker,
+                    zorder=5,
+                    label='_nolegend_')
+
+        ax.grid(True, linestyle='--', alpha=0.5)
+
+    ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
+
+    # Build combined line + marker legend handles
+    line_handles, _ = ax.get_legend_handles_labels()
+    combined_handles = []
+    for model, line in zip(models, line_handles):
+        linestyle = models_style[model]['linestyle'] if models_style else '-'
+        color = models_style[model]['color'] if models_style else line.get_color()
+        marker = linestyle_to_marker.get(linestyle, 'o')
+        if base_n_comp and model in base_n_comp:
+            marker_handle = plt.Line2D([0], [0], marker=marker, color=color,
+                                       linestyle='none', markersize=6)
+            combined_handles.append((line, marker_handle))
+        else:
+            combined_handles.append(line)
+
+    fig.legend(
+        handles=combined_handles,
+        labels=list(models),
+        handler_map={tuple: HandlerTuple(ndivide=None, pad=0)},
+        loc='upper center',
+        bbox_to_anchor=(0.5, 1.2),
+        ncol=len(models) / nrows_legend,
+        frameon=False
+    )
+
+    if savefig:
+        plt.savefig(path, dpi=300, bbox_inches="tight")
 
     return fig
 
