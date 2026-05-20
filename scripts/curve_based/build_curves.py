@@ -93,6 +93,14 @@ def main(bids_path: str, output_path: str, market: str, coupling_path=None, rest
     price_grid = None
     sd = build_curves(preprocessor, bids, price_grid, coupling)
 
+    # === Patch: replace 2024-06-26 curves with 2024-06-25 values (EPEX only) - ISSUE WITH EPEX ON THAT DAY ===
+    if market in ['EPEX-DE-LU', 'EPEX-FR']:
+        idx_25 = [i for i, t in enumerate(sd.timestamps) if pd.Timestamp(t).date() == pd.Timestamp('2024-06-25').date()]
+        idx_26 = [i for i, t in enumerate(sd.timestamps) if pd.Timestamp(t).date() == pd.Timestamp('2024-06-26').date()]
+        sd.supply.data_matrix[idx_26] = sd.supply.data_matrix[idx_25]
+        sd.demand.data_matrix[idx_26] = sd.demand.data_matrix[idx_25]
+        print("Patched: 2024-06-26 curves replaced by 2024-06-25 values.")
+
     dirname = os.path.dirname(output_path)
     os.makedirs(dirname, exist_ok=True)
     sd.to_pickle(output_path)
@@ -106,6 +114,14 @@ def main(bids_path: str, output_path: str, market: str, coupling_path=None, rest
         print(f"Final optimized price grid size common to supply and demand is: {len(price_grid)}")
 
         sd = build_curves(preprocessor, bids, price_grid, coupling)
+
+        # === Patch: replace 2024-06-26 curves with 2024-06-25 values (EPEX only) - ISSUE WITH EPEX ON THAT DAY ===
+        if market in ['EPEX-DE-LU', 'EPEX-FR']:
+            idx_25 = [i for i, t in enumerate(sd.timestamps) if pd.Timestamp(t).date() == pd.Timestamp('2024-06-25').date()]
+            idx_26 = [i for i, t in enumerate(sd.timestamps) if pd.Timestamp(t).date() == pd.Timestamp('2024-06-26').date()]
+            sd.supply.data_matrix[idx_26] = sd.supply.data_matrix[idx_25]
+            sd.demand.data_matrix[idx_26] = sd.demand.data_matrix[idx_25]
+            print("Patched: 2024-06-26 curves replaced by 2024-06-25 values.")
         
         output_path_opt = f"{output_path.split('.')[0]}_opt.pkl"
         dirname = os.path.dirname(output_path_opt)
