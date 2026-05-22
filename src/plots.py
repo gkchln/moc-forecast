@@ -398,6 +398,7 @@ def plot_curves_price_prediction(
         figsize=(4, 3),
         axis_fontsize=12,
         text_fontsize=12,
+        top_ylim=70,
         path=None,
         savefig=False
     ):
@@ -419,7 +420,7 @@ def plot_curves_price_prediction(
     plt.xticks(fontsize=axis_fontsize)
     plt.xlabel('Price [€/MWh]', fontsize=axis_fontsize)
     plt.yticks(fontsize=axis_fontsize)
-    plt.ylim(top=70)
+    plt.ylim(top=top_ylim)
 
     plt.title(timestamp, fontsize=text_fontsize)
     plt.text(0.8, 0.93, f'Actual: {price_true:.0f} €/MWh', ha='right', va='center',
