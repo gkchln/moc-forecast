@@ -27,7 +27,7 @@ from skfda.representation import FDataGrid
 from skfda.preprocessing.dim_reduction import FPCA
 from .curves import SupplyDemandTimeSeries, SupplyDemandTransformer, SupplyDemandFPCA, SupplyDemandZST, concat_sdts, _incremental_inverse
 from .preprocessing import ExogPreprocessor
-from .models import LassoVARX, MultiHourlyAutoARIMA
+from .models import LassoVARX, MultiHourlyAutoARIMA, MultiHourlyBootstrapper
 from joblib import Parallel, delayed
 from statsmodels.robust import mad
 
@@ -57,6 +57,7 @@ class SupplyDemandForecaster:
             K_supply: int | None = None,
             K_demand: int | None = None,
             choice_K: str | None = 'elbow',
+            recalibrate_transformer: bool = False,
             dummy_vars: list[str] = ['is_Holiday', 'is_Monday', 'is_Saturday']
         ):
         self.model = model
@@ -392,7 +393,7 @@ def _simulate_single_path(j: int, Ysims_slice: np.ndarray, index: pd.DatetimeInd
 class SupplyDemandPriceSimulator:
     def __init__(self,
         curves_forecaster: SupplyDemandForecaster,
-        model: MultiHourlyAutoARIMA,
+        model: MultiHourlyAutoARIMA | MultiHourlyBootstrapper,
         calibration_window: datetime.timedelta,
         test_start_date: datetime.date,
         test_end_date: datetime.date | None = None,
@@ -479,10 +480,13 @@ class SupplyDemandPriceSimulator:
 
             # Updating errors model
             new_error = errors.loc[date_start:date_end] # 24 rows df
-            self.model.update(new_error, strategy='rolling')
+            self.model.update(new_error, strategy='rolling', refit_auto=True)
 
             # Transforming back in functional form
-            transformer = self.forecaster.transformers_[date_idx]
+            if self.forecaster.recalibrate_transformer:
+                transformer = self.forecaster.transformers_[date_idx]
+            else:
+                transformer = self.forecaster.transformer_
             scores_names = self.forecaster.endogs_pred_.columns
 
             # ------ PARALLEL BLOCK ------
