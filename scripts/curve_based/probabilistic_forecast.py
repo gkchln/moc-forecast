@@ -3,7 +3,7 @@ import datetime as dt
 import pandas as pd
 import argparse
 from src.forecasters import load_sdf, SupplyDemandPriceSimulator
-from src.models import MultiHourlyAutoARIMA
+from src.models import MultiHourlyBootstrapper
 
 
 
@@ -19,17 +19,7 @@ def main(
     ):
     forecaster = load_sdf(forecaster_path)
 
-    # Taking this model for the errors boils down to a simple bootstrap
-    auto_arima_kwargs = {
-        'seasonal': False,
-        'max_p': 0,
-        'max_q': 0,
-        'start_p': 0,
-        'start_q': 0,
-        'stationary': True
-    }
-
-    model = MultiHourlyAutoARIMA(auto_arima_kwargs=auto_arima_kwargs)
+    model = MultiHourlyBootstrapper()
 
     simulator = SupplyDemandPriceSimulator(
         curves_forecaster=forecaster,
@@ -44,6 +34,10 @@ def main(
     price_sims = simulator.simulate_prices(n_jobs=n_jobs)
     price_quantiles = simulator.get_quantiles(price_sims, n_quantiles=n_quantiles)
 
+    # Saving
+    directory = os.path.dirname(output_path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
     price_quantiles.to_pickle(output_path)
 
 
