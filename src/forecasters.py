@@ -455,7 +455,7 @@ class SupplyDemandPriceSimulator:
     #     return pd.DataFrame(approx_error_sims, index=self.test_timestamps, columns=range(self.nsim))
 
 
-    def simulate_prices(self, n_jobs: int = 1):
+    def simulate_prices(self, n_jobs: int = 1, show_progress=False):
         """Monte carlo simulation of prices with bootstrap"""
         # Computing initial vector repr. errors
         errors = self.forecaster.endogs_true_ - self.forecaster.endogs_pred_
@@ -467,7 +467,12 @@ class SupplyDemandPriceSimulator:
         # Initialize simulated prices
         price_sims = np.zeros((24 * self.ndays_test, self.nsim))
 
-        for i in trange(self.ndays_test, desc=f"Daily iterations"):
+        if show_progress:
+            progress_iter = trange(self.ndays_test, desc="Daily iterations")
+        else:
+            progress_iter = range(self.ndays_test)
+
+        for i in progress_iter:
             date = self.test_start_date + datetime.timedelta(days=i)
             date_idx = self.test_start_date_idx + i
             date_start = pd.Timestamp(date)
