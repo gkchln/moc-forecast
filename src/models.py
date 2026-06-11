@@ -748,3 +748,269 @@ class MultiHourlyAutoARIMA:
         q: float,
     ) -> pd.DataFrame:
         return pd.DataFrame(np.quantile(pred_sim, q, axis=2), index=self.predict_index, columns=self.endog_colnames)
+    
+
+class HourlyIntercept:
+    """
+    Fits a per-hour intercept (mean) to a univariate time series.
+
+    For each of the 24 hours, the model is simply:
+        y_t = mu_h + eps_t,   h = hour(t)
+
+    where mu_h is the sample mean for hour h and eps_t are independent with hour-specific variance sigma_h^2.
+    """
+
+    # ------------------------------------------------------------------
+    # Fitting
+    # ------------------------------------------------------------------
+
+    def fit(self, endog: pd.Series) -> None:
+        self.timestamps: pd.DatetimeIndex = endog.index
+        self.endog: pd.Series = endog
+        self._compute_params()
+
+    def _compute_params(self) -> None:
+        """Recompute per-hour mean and standard deviation from the current endog window."""
+        mean = np.zeros(24)
+        std = np.zeros(24)
+        for h in range(24):
+            y = self.endog[self.endog.index.hour == h].to_numpy()
+            mean[h] = y.mean()
+            std[h] = np.sqrt(np.mean((y - mean[h]) ** 2))
+        self.mean_: np.ndarray = mean   # shape (24,)
+        self.std_: np.ndarray = std      # shape (24,)
+
+    # ------------------------------------------------------------------
+    # Diagnostics
+    # ------------------------------------------------------------------
+
+    def get_fittedvalues(self) -> pd.Series:
+        return pd.Series(
+            [self.mean_[t.hour] for t in self.timestamps],
+            index=self.timestamps,
+        )
+
+    def get_residuals(self) -> pd.Series:
+        return self.endog - self.get_fittedvalues()
+
+    def get_std(self) -> list[float]:
+        """Return list of 24 per-hour standard deviations (index = hour)."""
+        return self.std_.tolist()
+
+    def get_std_residuals(self) -> pd.Series:
+        """
+        Standardised residuals: eps_t / std_h, h = hour(t).
+        By construction these have zero mean and unit variance per hour.
+        """
+        resid = self.get_residuals()
+        per_obs_std = np.array([self.std_[t.hour] for t in self.timestamps])
+        return resid / per_obs_std
+
+    # ------------------------------------------------------------------
+    # Prediction
+    # ------------------------------------------------------------------
+
+    def predict(self) -> pd.Series:
+        """Return the 24 hourly intercepts for the next calendar day."""
+        idx = pd.date_range(
+            start=self.timestamps[-1] + pd.Timedelta(hours=1),
+            periods=24,
+            freq='h',
+        )
+        # Map each future timestamp to its hour's mean – correct for any start hour.
+        return pd.Series([self.mean_[t.hour] for t in idx], index=idx)
+
+    # ------------------------------------------------------------------
+    # Rolling / expanding update
+    # ------------------------------------------------------------------
+
+    def recalibrate(
+        self,
+        endog: pd.Series,
+        strategy: str = 'rolling',
+    ) -> None:
+        """
+        Extend the estimation window by one day (24 obs) and recompute params.
+
+        Parameters
+        ----------
+        endog : pd.Series
+            Exactly 24 new hourly observations immediately following the last
+            training timestamp.
+        strategy : {'rolling', 'expanding'}
+            'rolling'   – drop the oldest 24 obs (fixed window size).
+            'expanding' – keep all observations (growing window).
+        """
+        new_timestamps = pd.date_range(
+            start=self.timestamps[-1] + pd.Timedelta(hours=1),
+            periods=24,
+            freq='h',
+        )
+        if not new_timestamps.equals(endog.index):
+            raise ValueError(
+                "endog must have exactly 24 hourly observations starting from the hour "
+                "after the last observation used in fit() or previous recalibrate()."
+            )
+
+        if strategy == 'rolling':
+            self.timestamps = self.timestamps[24:].append(new_timestamps)
+            self.endog = pd.concat([self.endog.iloc[24:], endog])
+        elif strategy == 'expanding':
+            self.timestamps = self.timestamps.append(new_timestamps)
+            self.endog = pd.concat([self.endog, endog])
+        else:
+            raise ValueError("strategy must be either 'rolling' or 'expanding'.")
+
+        self._compute_params()
+
+
+# ---------------------------------------------------------------------------
+
+
+class MultiHourlyBootstrapper:
+    """
+    Fits one :class:`HourlyIntercept` model per target variable.
+
+    Drop-in replacement for ``MultiHourlyAutoARIMA``.  The public interface –
+    including ``fit``, ``predict``, ``simulate``, ``update``, and
+    ``get_quantile`` – is signature-compatible so existing call-sites need no
+    changes.  Parameters that are meaningless for an intercept model
+    (``exog_dict``, ``refit_auto``, ``maxiter``) are silently accepted and
+    ignored.
+    """
+
+    def __init__(self) -> None:
+        self.models: dict[str, HourlyIntercept] = {}
+
+    # ------------------------------------------------------------------
+    # Fitting
+    # ------------------------------------------------------------------
+
+    def fit(
+        self,
+        endog_df: pd.DataFrame,
+        exog_dict: dict[str, pd.DataFrame] | None = None,  # ignored – API parity
+        verbose: bool = False,
+    ) -> None:
+        self.models = {}
+        self.endog_colnames = endog_df.columns
+        for col in endog_df.columns:
+            if verbose:
+                logging.info(f"Fitting HourlyIntercept for column: {col}")
+            model = HourlyIntercept()
+            model.fit(endog_df[col])
+            self.models[col] = model
+
+    # ------------------------------------------------------------------
+    # Diagnostics
+    # ------------------------------------------------------------------
+
+    def get_fittedvalues(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            {col: m.get_fittedvalues() for col, m in self.models.items()}
+        )
+
+    def get_residuals(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            {col: m.get_residuals() for col, m in self.models.items()}
+        )
+
+    def get_std(self) -> pd.DataFrame:
+        """DataFrame of shape (24, n_vars): per-hour standard deviation for each variable."""
+        return pd.DataFrame(
+            {col: m.get_std() for col, m in self.models.items()}
+        )
+
+    def get_std_residuals(self) -> pd.DataFrame:
+        """DataFrame of shape (T, n_vars): standardised in-sample residuals."""
+        return pd.DataFrame(
+            {col: m.get_std_residuals() for col, m in self.models.items()}
+        )
+
+    # ------------------------------------------------------------------
+    # Prediction
+    # ------------------------------------------------------------------
+
+    def predict(
+        self,
+        exog_dict: dict[str, pd.DataFrame] | None = None,  # ignored – API parity
+    ) -> pd.DataFrame:
+        """Return per-hour intercept forecasts for all variables (shape 24 × p)."""
+        preds = pd.DataFrame(
+            {col: m.predict() for col, m in self.models.items()}
+        )
+        self.predict_index = preds.index  # cached for get_quantile()
+        return preds
+
+    # ------------------------------------------------------------------
+    # Rolling / expanding update  (mirrors MultiHourlyAutoARIMA.update)
+    # ------------------------------------------------------------------
+
+    def update(
+        self,
+        endog_df: pd.DataFrame,
+        exog_dict: dict[str, pd.DataFrame] | None = None,  # ignored
+        refit_auto: bool = False,                          # ignored
+        strategy: str = 'rolling',
+        maxiter: int = 50,                                 # ignored
+        **kwargs: Any,
+    ) -> None:
+        for col, model in self.models.items():
+            model.recalibrate(endog_df[col], strategy=strategy)
+
+    # ------------------------------------------------------------------
+    # Simulation  (mirrors MultiHourlyAutoARIMA.simulate exactly)
+    # ------------------------------------------------------------------
+
+    def simulate(
+        self,
+        exog_dict: dict[str, pd.DataFrame] | None = None,  # ignored – API parity
+        nsim: int = 1000,
+    ) -> np.ndarray:
+        """
+        Parametric bootstrap via residual resampling.
+
+        For each simulation draw the 24-hour trajectory is:
+            y_sim[h, :] = mu[h, :] + sigma[h, :] * eps_sim[h, :],
+
+        where eps_sim is drawn (with replacement) from the pool of
+        standardised in-sample residuals.  Sampling entire rows of the
+        (T × p) residual matrix preserves cross-variable correlation.
+
+        Returns
+        -------
+        np.ndarray of shape (24, n_vars, nsim)
+        """
+        n = 24
+        p = len(self.endog_colnames)
+
+        mean = self.predict()                       # (24, p)  – also sets predict_index
+        eps_std = self.get_std_residuals()          # (T,  p)
+
+        # Draw n*nsim rows with replacement; each row is one cross-sectional draw.
+        eps_sim = (
+            eps_std
+            .sample(n * nsim, replace=True, ignore_index=True)
+            .to_numpy()
+            .reshape(n, p, nsim)
+        )                                           # (24, p, nsim)
+
+        std = self.get_std().to_numpy()    # (24, p)
+        eps_sim = std[..., np.newaxis] * eps_sim    # (24, p, nsim)  – destandardise
+        pred_sim = mean.to_numpy()[..., np.newaxis] + eps_sim  # (24, p, nsim)
+        return pred_sim
+
+    # ------------------------------------------------------------------
+    # Quantile extraction  (mirrors MultiHourlyAutoARIMA.get_quantile)
+    # ------------------------------------------------------------------
+
+    def get_quantile(
+        self,
+        pred_sim: np.ndarray,
+        q: float,
+    ) -> pd.DataFrame:
+        return pd.DataFrame(
+            np.quantile(pred_sim, q, axis=2),
+            index=self.predict_index,
+            columns=self.endog_colnames,
+        )
