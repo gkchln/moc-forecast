@@ -32,12 +32,12 @@ def main(
         K_demand,
         choice_K,
         transformer,
+        transformer_type,
         autocorr_structure,
         crosscorr_structure,
         calibration_window,
         test_start_date,
         test_end_date,
-        recalibrate_transformer=False,
         save_forecaster_only=False,
         show_progress=False,
     ):
@@ -52,7 +52,7 @@ def main(
         exog_struc = str(EXOG_STRUCTURE).lower()[:4], # 'conc' or 'full'
         lags_exog = ''.join(map(str, LAGS_EXOG)), # e.g. '017' for lags 0, 1 and 7
         transformer = transformer, # 'fpca' or 'zst'
-        trans_recal = 'dynamic' if recalibrate_transformer else 'static',
+        trans_type = transformer_type, # 'static' or 'dynamic'
         K_supply = K_supply or 'none',
         K_demand = K_demand or 'none',
         choice_K = choice_K or 'none',
@@ -110,6 +110,11 @@ def main(
         n_jobs=-1,
     )
 
+    if transformer_type == "dynamic":
+        recalibrate_transformer = True
+    else:
+        recalibrate_transformer = False
+
     forecaster = SupplyDemandForecaster(
         model,
         transformer=transformer,
@@ -151,8 +156,8 @@ if __name__ == "__main__":
     parser.add_argument("--K_supply", dest="K_supply", type=int, help="Number of supply curves features")
     parser.add_argument("--K_demand", dest="K_demand", type=int, help="Number of demand curves features")
     parser.add_argument("--transformer", dest="transformer", choices=["fpca", "zst"], help="Curve transformer to use ('fpca' or 'zst')")
-    parser.add_argument("--recalibrate_transformer", dest="recalibrate_transformer", action="store_true",
-                        help="Whether to refit the tranformer every day or fit once on initial calibration window")
+    parser.add_argument("--transformer_type", dest="transformer_type", choices=["static", "dynamic"], default="static",
+                        help="Whether to refit the tranformer every day (dynamic) or fit once on initial calibration window (static)")
     parser.add_argument("--autocorr_structure", dest="autocorr_structure", choices=["concurrent", "full"],
                         help="Autocorrelation structure ('concurrent' or 'full')")
     parser.add_argument("--crosscorr_structure", dest="crosscorr_structure", choices=["concurrent", "full", "none"],
@@ -191,12 +196,12 @@ if __name__ == "__main__":
         args.K_demand,
         args.choice_K,
         args.transformer,
+        args.transformer_type,
         args.autocorr_structure,
         args.crosscorr_structure,
         args.calibration_window,
         args.test_start_date,
         args.test_end_date,
-        args.recalibrate_transformer,
         args.save_forecaster_only,
         args.show_progress,
     )

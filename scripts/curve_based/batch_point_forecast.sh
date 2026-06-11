@@ -6,18 +6,19 @@ set -euo pipefail
 # Usage info
 # ---------------------------
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-    echo "Usage: $0 MARKET TRANSFORMER K_SUPPLY K_DEMAND [N_PARALLEL] [N_THREADS]"
+    echo "Usage: $0 MARKET TRANSFORMER TRANS_TYPE K_SUPPLY K_DEMAND [N_PARALLEL] [N_THREADS]"
     echo
     echo "Runs all forecast combinations in parallel."
     echo "  MARKET      : market name (required)"
-    echo "  TRANSFORMER : space-separated list of transformers (required)"
+    echo "  TRANSFORMER : space-separated list of transformers ("fpca" or "zst", required)"
+    echo "  TRANS_TYPE  : space-separated list of transformer types ("dynamic" or "static", required)"
     echo "  K_SUPPLY    : space-separated list of K_supply values (required)"
     echo "  K_DEMAND    : space-separated list of K_demand values (required)"
     echo "  N_PARALLEL  : number of parallel jobs (default: 8)"
     echo "  N_THREADS   : OMP threads per job     (default: 1)"
     echo
     echo "Tip: set N_PARALLEL * N_THREADS <= total logical cores."
-    echo "Example: $0 GME \"fpca zst\" \"2 3 4 5\" \"10 15\" 48 2"
+    echo "Example: $0 GME \"fpca zst\" \"dynamic static\" \"2 3 4 5\" \"10 15\" 48 2"
     exit 0
 fi
 
@@ -26,13 +27,15 @@ fi
 # ---------------------------
 MARKET=${1:?          "Error: MARKET (arg 1) is required"}
 TRANSFORMER_ARG=${2:? "Error: TRANSFORMER (arg 2) is required"}
-K_SUPPLY_ARG=${3:?    "Error: K_SUPPLY (arg 3) is required"}
-K_DEMAND_ARG=${4:?    "Error: K_DEMAND (arg 4) is required"}
-N_PARALLEL=${5:-8}
-N_THREADS=${6:-1}
+TRANS_TYPE_ARG=${3:? "Error: TRANS_TYPE (arg 3) is required"}
+K_SUPPLY_ARG=${4:?    "Error: K_SUPPLY (arg 4) is required"}
+K_DEMAND_ARG=${5:?    "Error: K_DEMAND (arg 5) is required"}
+N_PARALLEL=${6:-8}
+N_THREADS=${7:-1}
 
 # Convert space-separated strings to arrays
 read -ra TRANSFORMER <<< "$TRANSFORMER_ARG"
+read -ra TRANS_TYPE <<< "$TRANS_TYPE_ARG"
 read -ra K_SUPPLY <<< "$K_SUPPLY_ARG"
 read -ra K_DEMAND <<< "$K_DEMAND_ARG"
 
@@ -64,7 +67,7 @@ CROSSCORR_STRUCTURE=("none" "concurrent")
 # ---------------------------
 run_one() {
     line="$1"
-    read -r Ks Kd chK ac cc trans <<< "$line"
+    read -r Ks Kd chK ac cc trans transtype <<< "$line"
 
     # Set threading for this job only
     export OMP_NUM_THREADS="$N_THREADS"
@@ -82,6 +85,7 @@ run_one() {
         --K_demand "$Kd" \
         --choice_K "$chK" \
         --transformer "$trans" \
+        --transformer_type "$transtype" \
         --autocorr_structure "$ac" \
         --crosscorr_structure "$cc"
 }
@@ -98,7 +102,9 @@ gen_combinations() {
                 for ac in "${AUTOCORR_STRUCTURE[@]}"; do
                     for cc in "${CROSSCORR_STRUCTURE[@]}"; do
                         for trans in "${TRANSFORMER[@]}"; do
-                            echo "$Ks $Kd $chK $ac $cc $trans"
+                            for transtype in "${TRANS_TYPE[@]}"; do
+                                echo "$Ks $Kd $chK $ac $cc $trans $transtype"
+                            done
                         done
                     done
                 done
