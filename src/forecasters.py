@@ -84,15 +84,21 @@ class SupplyDemandForecaster:
         self.choice_K = choice_K
         self.K_supply = K_supply
         self.K_demand = K_demand
+        self.recalibrate_transformer = recalibrate_transformer
+
+        self.transformer_ = None
 
         self.forecast_dates_ = []
         self.scalers_endog_ = []
         self.scalers_exog_ = []
-        self.transformers_ = []
         self.endogs_true_ = []
         self.endogs_pred_ = []
-        self.K_supply_ = []
-        self.K_demand_ = []
+        self.models_ = []
+
+        if recalibrate_transformer:
+            self.transformers_ = []
+            self.K_supply_ = []
+            self.K_demand_ = []
 
 
     @staticmethod
@@ -192,32 +198,48 @@ class SupplyDemandForecaster:
     
 
     def _transform_curves(self, sd: SupplyDemandTimeSeries) -> pd.DataFrame:
-        if self.transformer_name == 'zst':
-            transformer = SupplyDemandZST(self.K_supply, self.K_demand).fit(sd)
+        if self.transformer_ and not self.recalibrate_transformer:
+            transformer = self.transformer_
+
         else:
-            if self.choice_K:
-                transformer = SupplyDemandFPCA(MAX_K_SUPPLY, MAX_K_DEMAND).fit(sd)
-                if self.choice_K == 'elbow':
-                    K_supply, K_demand = self._get_elbows(transformer)
-                elif self.choice_K == 'threshold':
-                    K_supply, K_demand = self._get_thresholds(transformer)
-                elif self.choice_K == 'threshold-elbow':
-                    K_supply, K_demand = self._get_max_elbows_thresholds(transformer)
-                elif self.choice_K == 'elbow-mcp':
-                    K_supply, K_demand = self._get_mcp_elbows(transformer, sd)
-                self.K_supply_.append(K_supply)
-                self.K_demand_.append(K_demand)
+            if self.transformer_name == 'zst':
+                transformer = SupplyDemandZST(self.K_supply, self.K_demand).fit(sd)
+
             else:
-                K_supply = self.K_supply
-                K_demand = self.K_demand
-            transformer = SupplyDemandFPCA(K_supply, K_demand).fit(sd)
+                if self.choice_K:
+                    transformer = SupplyDemandFPCA(MAX_K_SUPPLY, MAX_K_DEMAND).fit(sd)
+                    if self.choice_K == 'elbow':
+                        K_supply, K_demand = self._get_elbows(transformer)
+                    elif self.choice_K == 'threshold':
+                        K_supply, K_demand = self._get_thresholds(transformer)
+                    elif self.choice_K == 'threshold-elbow':
+                        K_supply, K_demand = self._get_max_elbows_thresholds(transformer)
+                    elif self.choice_K == 'elbow-mcp':
+                        K_supply, K_demand = self._get_mcp_elbows(transformer, sd)
+                else:
+                    K_supply = self.K_supply
+                    K_demand = self.K_demand
+
+                if self.recalibrate_transformer:
+                    self.K_supply_.append(K_supply)
+                    self.K_demand_.append(K_demand)
+                else:
+                    self.K_supply_ = K_supply
+                    self.K_demand_ = K_demand
+
+                transformer = SupplyDemandFPCA(K_supply, K_demand).fit(sd)
+
         endog = transformer.transform(sd)
         self.transformer_ = transformer # This is the "current" transformer
-        self.transformers_.append(transformer)
+
+        if self.recalibrate_transformer:
+            self.transformers_.append(transformer) # We store the transformers for later diagnostics or price simulator
+
         scaler_endog = StandardScaler()
         endog_scaled = scaler_endog.fit_transform(endog)
         self.scaler_endog_ = scaler_endog # This is the "current" scaler
         self.scalers_endog_.append(scaler_endog)
+
         return pd.DataFrame(endog_scaled, columns=endog.columns, index=endog.index)
 
     
@@ -259,8 +281,10 @@ class SupplyDemandForecaster:
         endog_scaled = self._transform_curves(sd)
         endog_scaled = endog_scaled.reindex(exog.index) # This will add rows with NaN for the forecasted day
         exog_scaled = self._transform_exog(exog, self.dummy_vars)
-        endog_scaled_pred = self.model.fit_forecast(endog_scaled, exog_scaled, test_start=exog.index[-1].date(),
+        model_ = self.model
+        endog_scaled_pred = model_.fit_forecast(endog_scaled, exog_scaled, test_start=exog.index[-1].date(),
                                                     show_features=show_features)
+        self.models_.append(model_)
         return self._inverse_transform_pred(endog_scaled_pred)
     
 
