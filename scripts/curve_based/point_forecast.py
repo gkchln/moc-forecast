@@ -38,7 +38,8 @@ def main(
         test_start_date,
         test_end_date,
         recalibrate_transformer=False,
-        show_progress=False
+        save_forecaster_only=False,
+        show_progress=False,
     ):
     """Run the daily recalibration forecast pipeline."""
 
@@ -130,8 +131,13 @@ def main(
     forecasters_folder = join(save_folder, 'forecasters')
     os.makedirs(curves_folder, exist_ok=True)
     os.makedirs(forecasters_folder, exist_ok=True)
-    sd_pred.to_pickle(join(curves_folder, f'{run_name}.pkl'))
-    forecaster.to_pickle(join(forecasters_folder, f'{run_name}.pkl'))
+    if not save_forecaster_only:
+        curves_outfile = join(curves_folder, f'{run_name}.pkl')
+        sd_pred.to_pickle(curves_outfile)
+        logging.info("Saved curves to {}".format(curves_outfile))
+    forecaster_outfile = join(forecasters_folder, f'{run_name}.pkl')
+    forecaster.to_pickle(forecaster_outfile)
+    logging.info("Saved forecaster to {}".format(forecaster_outfile))
 
     logging.info(f"Done.")
 
@@ -156,6 +162,7 @@ if __name__ == "__main__":
     parser.add_argument("--calib_window", dest="calibration_window", type=int, help="Calibration window in days", default=364)
     parser.add_argument("--start_date", dest="test_start_date", type=int, help="Test start date in YYYYMMDD format", default=20240101)
     parser.add_argument("--end_date", dest="test_end_date", type=int, help="Test end date in YYYYMMDD format", default=20241231)
+    parser.add_argument("--save_forecaster_only", dest="save_forecaster_only", action="store_true", help="Wether to save forecaster only (True) or both forecaster and curves")
     parser.add_argument("--progress", dest="show_progress", action="store_true", help="Show progress daily recalibration progress bar")
 
     args = parser.parse_args()
@@ -190,7 +197,8 @@ if __name__ == "__main__":
         args.test_start_date,
         args.test_end_date,
         args.recalibrate_transformer,
-        args.show_progress
+        args.save_forecaster_only,
+        args.show_progress,
     )
 
 
