@@ -659,7 +659,7 @@ class SupplyDemandTimeSeries:
                 clearing_prices.append(intersections_price[0]) # If multiple intersections, take the first one
         
         if return_series:
-            return pd.Series(clearing_prices, index=self.timestamps)
+            return pd.Series(clearing_prices, index=self.timestamps, name="Price")
         else:
             return np.array(clearing_prices, dtype=return_dtype)
         
