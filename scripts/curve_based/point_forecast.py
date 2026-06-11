@@ -39,6 +39,7 @@ def main(
         calibration_window,
         test_start_date,
         test_end_date,
+        recalibrate_transformer=False,
         show_progress=False
     ):
     """Run the daily recalibration forecast pipeline."""
@@ -50,6 +51,7 @@ def main(
         crosscorr_struc = str(crosscorr_structure).lower()[:4], # 'conc', 'full' or 'none'
         lags_endog = ''.join(map(str, LAGS_ENDOG)), # e.g. '1237' for lags 1, 2, 3 and 7
         transformer = transformer, # 'fpca' or 'zst'
+        trans_recal = 'dynamic' if recalibrate_transformer else 'static',
         K_supply = K_supply or 'none',
         K_demand = K_demand or 'none',
         choice_K = choice_K or 'none',
@@ -112,7 +114,8 @@ def main(
         transformer=transformer,
         choice_K=choice_K,
         K_supply=K_supply,
-        K_demand=K_demand
+        K_demand=K_demand,
+        recalibrate_transformer=recalibrate_transformer
     )
 
     sd_pred = forecaster.fit_forecast_rolling(sd, exog, test_start_date, show_progress=show_progress)
@@ -137,6 +140,8 @@ if __name__ == "__main__":
     parser.add_argument("--K_supply", dest="K_supply", type=int, help="Number of supply curves features")
     parser.add_argument("--K_demand", dest="K_demand", type=int, help="Number of demand curves features")
     parser.add_argument("--transformer", dest="transformer", choices=["fpca", "zst"], help="Curve transformer to use ('fpca' or 'zst')")
+    parser.add_argument("--recalibrate_transformer", dest="recalibrate_transformer", action="store_true",
+                        help="Whether to refit the tranformer every day or fit once on initial calibration window")
     parser.add_argument("--autocorr_structure", dest="autocorr_structure", choices=["concurrent", "full"],
                         help="Autocorrelation structure ('concurrent' or 'full')")
     parser.add_argument("--crosscorr_structure", dest="crosscorr_structure", choices=["concurrent", "full", "none"],
@@ -179,6 +184,7 @@ if __name__ == "__main__":
         args.calibration_window,
         args.test_start_date,
         args.test_end_date,
+        args.recalibrate_transformer,
         args.show_progress
     )
 
