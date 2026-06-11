@@ -611,7 +611,7 @@ class HourlyAutoARIMA:
             raise ValueError("strategy must be either 'rolling' or 'expanding'")
         
         if refit_auto:
-            self.fit(endog=endog, exog=exog, **self.auto_arima_kwargs)
+            self.fit(endog=endog, exog=exog)
         else:
             self.endog = endog
             self.exog = exog
