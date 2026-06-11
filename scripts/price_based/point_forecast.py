@@ -120,8 +120,9 @@ def main(
     os.makedirs(price_folder, exist_ok=True)
     os.makedirs(forecasters_folder, exist_ok=True)
     prices_pred.to_csv(join(price_folder, f'{run_name}.csv'), index=True)
+    logging.info(f"Saved price forecasts to {join(price_folder, f'{run_name}.csv')}")
     forecaster.to_pickle(join(forecasters_folder, f'{run_name}.pkl'))
-
+    logging.info(f"Saved forecaster to {join(forecasters_folder, f'{run_name}.pkl')}")
     logging.info(f"Done.")
 
 

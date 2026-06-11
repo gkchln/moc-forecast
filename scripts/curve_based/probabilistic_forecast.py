@@ -69,6 +69,7 @@ def main(
 
     # Saving
     price_quantiles.to_pickle(output_path)
+    logging.info(f"Saved quantiles forecasts to {output_path}")
 
     logging.info(f"Done.")
 
