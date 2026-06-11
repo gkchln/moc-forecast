@@ -120,6 +120,11 @@ def main(
 
     sd_pred = forecaster.fit_forecast_rolling(sd, exog, test_start_date, show_progress=show_progress)
 
+    ### Log MCP MAE ###
+    prices_pred = sd_pred.get_clearing_prices()
+    prices_true = sd.get_clearing_prices()
+    logging.info("MCP MAE: {:.2f}€/MWh".format((prices_true - prices_pred).abs().mean()))
+
     ### Save results ###
     curves_folder = join(save_folder, 'curves')
     forecasters_folder = join(save_folder, 'forecasters')
