@@ -6,6 +6,7 @@ from src.curves import load_sdts
 
 
 preprocess_start = '2022-12-25 00:00:00'
+test_start = '2024-01-01 00:00:00'
 test_end = '2024-12-31 23:00:00'
 
 mgp_prices_path = 'data/source/GME/MGP_prices.csv'
@@ -49,6 +50,7 @@ exog_variables = {
 
 for market in ['EPEX-DE-LU', 'EPEX-FR', 'GME']:
     os.makedirs(f'data/processed/{market}', exist_ok=True)
+    os.makedirs(f'data/output/{market}', exist_ok=True)
 
 
 ##################
@@ -131,18 +133,30 @@ for market in ['GME', 'EPEX-DE-LU', 'EPEX-FR']:
 
 
 
-##############
-### Curves ###
-##############
+#########################
+### Curves and prices ###
+#########################
 
-# Nothing to do, everything handled in scripts/build_curves
-
-##############
-### Prices ###
-##############
+# Curves construction already handled in scripts/build_curves but retrieving curves naive forecasts
+# Getting clearing prices and their naive forecasts
 
 for market in ['EPEX-DE-LU', 'EPEX-FR', 'GME']:
+    # Loading curves
     sd = load_sdts(curves_path.format(market=market))
+    # Computing clearing prices
     prices = sd.get_clearing_prices()
-    prices.name = 'Price'
     prices.to_csv(f'data/processed/{market}/price.csv')
+
+    # Get and save curves naive forecast
+    sd_naive = sd.get_naive_forecast()[test_start:test_end]
+    curves_pred_folder = f"data/output/{market}/curve_based/curves"
+    os.makedirs(curves_pred_folder, exist_ok=True)
+    start_date = pd.Timestamp(test_start).strftime('%Y%m%d')
+    end_date = pd.Timestamp(test_end).strftime('%Y%m%d')
+    sd_naive.to_pickle(os.path.join(curves_pred_folder, f"naive_{start_date}_{end_date}.pkl"))
+
+    # Derive and save prices naive forecast
+    prices_naive = sd_naive.get_clearing_prices()
+    prices_pred_folder = f"data/output/{market}/price_based/prices"
+    os.makedirs(prices_pred_folder, exist_ok=True)
+    prices_naive.to_csv(os.path.join(prices_pred_folder, f"naive_{start_date}_{end_date}.csv"))
