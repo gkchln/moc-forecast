@@ -5,7 +5,7 @@ import h5py
 import argparse
 import subprocess
 import os
-from os.path import join
+from os.path import join, splitext, basename
 
 
 def preprocess_point_forecasts(
@@ -19,8 +19,8 @@ def preprocess_point_forecasts(
     prices_pred = pd.read_csv(prices_pred_path, index_col=0, parse_dates=True)
 
     df = pd.DataFrame(index=prices_pred.index)
-    df["real"] = prices_true.loc[df.index, "NAT"]
-    df["pred"] = prices_pred.loc[:, "NAT"]
+    df["real"] = prices_true.loc[df.index, "Price"]
+    df["pred"] = prices_pred.loc[:, "Price"]
 
     for h in range(24):
         df_h = df[df.index.hour == h].copy()
@@ -34,8 +34,8 @@ def run_postforecasts(args):
     cmd = [
         args.julia,
         args.julia_script,
-        "--input_folder", join(args.processed_folder, '_input'),
-        "--output_folder", args.processed_folder,
+        "--input_folder", join(args.processed_folder, args.run_name, '_input'),
+        "--output_folder", join(args.processed_folder, args.run_name),
         "--calibration_windows", args.calibration_windows,
         "--methods", args.methods,
         "--start", str(args.test_start),
@@ -96,8 +96,6 @@ def postprocess_postforecasts(
 
             if hourly:
                 final = pd.concat(hourly).sort_index()
-                # /!\ postprocessing specific to GME /!\
-                final.clip(lower=0, inplace=True)
                 out = os.path.join(output_folder, f"{method}_{window}D.pkl")
                 final.to_pickle(out)
                 print(f"✅ Saved {out}")
@@ -132,9 +130,12 @@ def parse_args():
     parser.add_argument("--julia", type=str, default="julia",
                         help="Path to Julia executable")
 
-    parser.add_argument("--julia_script", type=str, default="scripts/postforecasts.jl")
+    parser.add_argument("--julia_script", type=str, default="scripts/price_based/postforecasts.jl")
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    args.run_name = splitext(basename(args.prices_pred_path))[0]
+
+    return args
 
 
 
@@ -145,7 +146,7 @@ if __name__ == "__main__":
     preprocess_point_forecasts(
         prices_true_path=args.prices_true_path,
         prices_pred_path=args.prices_pred_path,
-        output_folder=join(args.processed_folder, '_input')
+        output_folder=join(args.processed_folder, args.run_name, '_input')
     )
 
     # Step 2 – Julia postforecasts script
@@ -153,8 +154,8 @@ if __name__ == "__main__":
 
     # Step 3 – postprocessing
     postprocess_postforecasts(
-        input_folder=args.processed_folder,
-        output_folder=args.output_folder,
+        input_folder=join(args.processed_folder, args.run_name),
+        output_folder=join(args.output_folder, args.run_name),
         calibration_windows=args.calibration_windows,
         methods=args.methods
     )
