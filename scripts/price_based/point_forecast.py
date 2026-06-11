@@ -13,24 +13,22 @@ from src.models import LassoVARX
 ### Fixed parameters ###
 
 LAGS_ENDOG = [1, 2, 3, 7]
+LAGS_EXOG = [0, 1, 7]
 EXOG_USE = {
-    'Load': {"lags": [0, 1, 7], "structure": "{exog_structure}"},
-    'RES': {"lags": [0, 1, 7], "structure": "{exog_structure}"},
-    'NTC FR > IT': {"lags": [0, 1, 7], "structure": "{exog_structure}"},
-    'NTC CH > IT': {"lags": [0, 1, 7], "structure": "{exog_structure}"},
-    'Gas': {"lags": [2], "structure": "concurrent"},
-    'Coal': {"lags": [2], "structure": "concurrent"},
-    'Oil': {"lags": [2], "structure": "concurrent"},
-    'CO2': {"lags": [2], "structure": "concurrent"}
+    'Load': {"lags": "{lags_exog}", "structure": "{exog_structure}"},
+    'RES': {"lags": "{lags_exog}", "structure": "{exog_structure}"},
+    'NTC FR > IT': {"lags": "{lags_exog}", "structure": "{exog_structure}"},
+    'NTC CH > IT': {"lags": "{lags_exog}", "structure": "{exog_structure}"},
 }
 CRITERION = 'aic'
 RANDOM_STATE = 42
 
-def _format_exog_use(exog_structure):
+def _format_exog_use(lags_exog, exog_structure):
     exog_use = {}
     for key, value in EXOG_USE.items():
         exog_use[key] = value
         exog_use[key]['structure'] = value['structure'].format(exog_structure = exog_structure)
+        exog_use[key]['lags'] = value['lags'].format(lags_exog = lags_exog)
     return exog_use
 
 
@@ -49,12 +47,13 @@ def main(
     """Run the daily recalibration forecast pipeline."""
 
     # Naming convention for model/run
-    run_name = "{autocorr_struc}_{crosscorr_struc}_{lags_endog}_{exog_struc}" \
+    run_name = "{autocorr_struc}_{crosscorr_struc}_{lags_endog}_{exog_struc}_{lags_exog}" \
         "_{calib_wind}_{criterion}_{test_start}_{test_end}".format(
         autocorr_struc = str(autocorr_structure).lower()[:4], # 'conc' or 'full'
         crosscorr_struc = str(crosscorr_structure).lower()[:4], # 'conc', 'full' or 'none'
         lags_endog = ''.join(map(str, LAGS_ENDOG)), # e.g. '1237' for lags 1, 2, 3 and 7
         exog_struc = str(exog_structure).lower()[:4], # 'conc' or 'full'
+        lags_exog = ''.join(map(str, LAGS_EXOG)), # e.g. '017' for lags 0, 1 and 7
         calib_wind = calibration_window.days,
         criterion = CRITERION, 
         test_start = test_start_date.strftime('%Y%m%d'), # e.g. 20240101
@@ -103,7 +102,7 @@ def main(
         lags_endog=LAGS_ENDOG,
         autocorr_structure=autocorr_structure,
         crosscorr_structure=crosscorr_structure,
-        exog_use=_format_exog_use(exog_structure),
+        exog_use=_format_exog_use(LAGS_EXOG, exog_structure),
         calibration_window=calibration_window,
         criterion=CRITERION,
         random_state=RANDOM_STATE,
