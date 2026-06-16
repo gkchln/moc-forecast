@@ -45,7 +45,7 @@ def main(
 
     ### Setup logging ###
     run_name = "{autocorr_struc}_{crosscorr_struc}_{lags_endog}_{exog_struc}_{lags_exog}_{transformer}" \
-    "_{trans_recal}_{K_supply}_{K_demand}_{choice_K}_{calib_wind}_{criterion}_{test_start}_{test_end}".format(
+    "_{trans_type}_{K_supply}_{K_demand}_{choice_K}_{calib_wind}_{criterion}_{test_start}_{test_end}".format(
         autocorr_struc = str(autocorr_structure).lower()[:4], # 'conc' or 'full'
         crosscorr_struc = str(crosscorr_structure).lower()[:4], # 'conc', 'full' or 'none'
         lags_endog = ''.join(map(str, LAGS_ENDOG)), # e.g. '1237' for lags 1, 2, 3 and 7
