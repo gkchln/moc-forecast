@@ -6,11 +6,133 @@ from os.path import join
 from tqdm import trange
 from scipy.stats import norm
 from sklearn.metrics import root_mean_squared_error, mean_absolute_error, r2_score
-from skfda.misc.scoring import r2_score as fr2, mean_absolute_error as fmae, mean_squared_error as fmse, mean_absolute_percentage_error as fmape
+from skfda.misc.scoring import (
+    r2_score as fr2,
+    mean_absolute_error as fmae,
+    mean_squared_error as fmse,
+    mean_absolute_percentage_error as fmape,
+    explained_variance_score as fev
+)
 from skfda.representation import FDataGrid
 from skfda.misc.metrics import l1_norm, l2_norm
 from .utils import get_daily_df_from_hourly_series
-from .curves import SupplyDemandTimeSeries, load_sdts
+from .curves import SupplyDemandTimeSeries, SupplyDemandFPCA, SupplyDemandZST, SupplyDemandTransformer, load_sdts
+
+
+
+# -------------------------
+# Curves approximation
+# -------------------------
+
+
+def _compute_explained_variance_ratio(fd_true: FDataGrid, fd_approx: FDataGrid, transformer: SupplyDemandTransformer, side):
+    if isinstance(transformer, SupplyDemandZST):
+        res = fev(fd_true, fd_approx)
+    else:
+        fpca = transformer.transformer_supply_ if side == 'supply' else transformer.transformer_demand_
+        res = fpca.explained_variance_ratio_.cumsum()[-1] # Should be the same but faster computed this way
+    return res
+
+def compute_approx_metrics(sd: SupplyDemandTimeSeries, side: str, trans_type: str,
+                         max_K=20, correct_monotonicity=False):
+    """Compute approximation metrics for supply or demand curves.
+
+    This evaluates a sequence of reduced-dimension approximations using either FPCA or ZST.
+    For each component count, it computes explained variance and functional MAE on the selected side,
+    and MAE on the resulting clearing prices.
+
+    Args:
+        sd: Supply-demand time series object to approximate.
+        side: Which curve side to approximate, either 'supply' or 'demand'.
+        trans_type: Transformer type, either 'fpca' or 'zst'.
+        max_K: Maximum number of components to evaluate.
+        correct_monotonicity: If True, correct monotonicity after FPCA inverse transform.
+
+    Returns:
+        A dict with keys 'curve_ev', 'curve_mae', and 'mcp_mae', each holding a list of metrics
+        for component counts from 2 to max_K-1.
+    """
+    res = {}
+    res['curve_ev'] = []
+    res['curve_mae'] = []
+    res['mcp_mae'] = []
+
+    if trans_type == 'fpca':
+        sd_smooth = sd.smooth(bandwidth=1)
+        K_supply, K_demand = (max_K, 2) if side == 'supply' else (2, max_K)
+        transformer_full = SupplyDemandFPCA(K_supply, K_demand)
+        scores_full = transformer_full.fit_transform(sd_smooth)
+
+    for K in trange(2, max_K):
+        if side == 'supply':
+            K_supply, K_demand = K, 2
+        else:
+            K_supply, K_demand = 2, K
+
+        if trans_type == 'fpca':
+            transformer = transformer_full.reduce(K_supply, K_demand)
+            scores = scores_full.loc[:, transformer.supply_features_names + transformer.demand_features_names]
+            if correct_monotonicity:
+                recons_sd = transformer.inverse_transform(scores).correct_monotonicity()
+            else:
+                recons_sd = transformer.inverse_transform(scores)
+        else:
+            transformer = SupplyDemandZST(K_supply, K_demand)
+            scores = transformer.fit_transform(sd)
+            recons_sd = transformer.inverse_transform(scores)
+        
+        if side == 'supply':
+            recons_sd.demand = sd.demand.copy()
+            curve_ev = _compute_explained_variance_ratio(sd.supply, recons_sd.supply, transformer, side)
+            curve_mae = fmae(sd.supply, recons_sd.supply)
+        else:
+            recons_sd.supply = sd.supply.copy()
+            curve_ev = _compute_explained_variance_ratio(sd.demand, recons_sd.demand, transformer, side)
+            curve_mae = fmae(sd.demand, recons_sd.demand)
+        
+        mcp = sd.get_clearing_prices()
+        mcp_recons = recons_sd.get_clearing_prices()
+        mcp_mae = mean_absolute_error(mcp, mcp_recons)
+
+        res['curve_ev'].append(curve_ev)
+        res['curve_mae'].append(curve_mae)
+        res['mcp_mae'].append(mcp_mae)
+    
+    return res
+
+
+# -------------------------
+# Point prediction
+# -------------------------
+
+def compute_avg_curve_performance_metric(
+        curves_true: SupplyDemandTimeSeries,
+        curves_pred_dict: Dict[str, SupplyDemandTimeSeries]
+    ) -> Dict[str, pd.DataFrame]:
+    errors_dict = {}
+    for side in ["supply", "demand"]:
+        errors = pd.DataFrame()
+        fd_true = curves_true.supply if side == "supply" else curves_true.demand
+        for model, curves_pred in curves_pred_dict.items():
+            fd_pred = curves_pred.supply if side == "supply" else curves_pred.demand
+            errors.loc[model, "MAE [GWh]"] = fmae(fd_true, fd_pred)
+            errors.loc[model, "RMSE [GWh]"] = np.sqrt(fmse(fd_true, fd_pred))
+            errors.loc[model, "MAPE [%]"] = 100 * fmape(fd_true, fd_pred)
+        errors["rMAE"] = errors["MAE [GWh]"] / errors.loc["Naive", "MAE [GWh]"]
+        errors_dict[side] = errors
+    return errors_dict
+
+def compute_price_performance_metric(
+        prices_true: pd.Series,
+        prices_pred: pd.DataFrame
+    ) -> pd.DataFrame:
+    models = prices_pred.columns
+    error_df = pd.DataFrame(index=models)
+    error_df['MAE [€/MWh]'] = [mean_absolute_error(prices_true, prices_pred[model]) for model in models]
+    error_df['RMSE [€/MWh]'] = [root_mean_squared_error(prices_true, prices_pred[model]) for model in models]
+    error_df['rMAE'] = error_df['MAE [€/MWh]'] / error_df.loc['Naive', 'MAE [€/MWh]']
+    return error_df
+
 
 
 # -------------------------
@@ -299,8 +421,8 @@ def DM_test_scalar(
 
 
 def compute_performance_per_nb_of_components(curves_based_folder: str, model_runs: Dict, sd_true: SupplyDemandTimeSeries, side: str, max_n_components: int = 20):
-    mae, rmse, mape, r2, mae_mcp, rmse_mcp, r2_mcp = (
-        {model: [] for model in model_runs.keys()} for _ in range(7)
+    mae, rmse, mape, mae_mcp, rmse_mcp = (
+        {model: [] for model in model_runs.keys()} for _ in range(5)
     )
 
     prices_true = sd_true.get_clearing_prices()
@@ -320,24 +442,20 @@ def compute_performance_per_nb_of_components(curves_based_folder: str, model_run
                 mae[model].append(fmae(y_true, y_pred))
                 rmse[model].append(np.sqrt(fmse(y_true, y_pred)))
                 mape[model].append(100*fmape(y_true, y_pred))
-                r2[model].append(fr2(y_true, y_pred))
                 prices_pred = sd_pred.get_clearing_prices()
                 mae_mcp[model].append(mean_absolute_error(prices_true, prices_pred))
                 rmse_mcp[model].append(root_mean_squared_error(prices_true, prices_pred))
-                r2_mcp[model].append(r2_score(prices_true, prices_pred))
                 
             except FileNotFoundError as e:
                 mae[model].append(np.nan)
                 rmse[model].append(np.nan)
                 mape[model].append(np.nan)
-                r2[model].append(np.nan)
                 mae_mcp[model].append(np.nan)
                 rmse_mcp[model].append(np.nan)
-                r2_mcp[model].append(np.nan)
                 if 'ZST' not in model or n_components > 1: # Models with ZST and n_components=1 are not defined so no need to warn
                     print(e)
 
     idx = pd.Index(range(1, max_n_components+1), name=f'$K_{side[0]}$')
 
-    return (pd.DataFrame(d, index=idx) for d in [mae, rmse, mape, r2, mae_mcp, rmse_mcp, r2_mcp])
+    return (pd.DataFrame(d, index=idx) for d in [mae, rmse, mape, mae_mcp, rmse_mcp])
 
