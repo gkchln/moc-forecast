@@ -224,7 +224,10 @@ class ZielSteinertTransformer:
         zero_classes = class_mean_qty == 0
         zero_mask = zero_classes[membership]
         class_sizes = np.array([(membership == k).sum() for k in range(len(class_mean_qty))])
-        uniform_weights = (1 / class_sizes)[membership]
+
+        # Related problem: when multiple class bounds collapse to the same value (which can happen when taking a too high
+        # number of classes), class_sizes will also be zero for all but one of these bounds
+        uniform_weights = (1 / np.where(class_sizes == 0, 1, class_sizes))[membership]
 
         # Use normal weights where class_mean_qty > 0, uniform weights otherwise.
         # The np.where on the denominator avoids division by zero before branch selection.
