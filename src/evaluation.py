@@ -63,7 +63,7 @@ def compute_approx_metrics(sd: SupplyDemandTimeSeries, side: str, trans_type: st
         transformer_full = SupplyDemandFPCA(K_supply, K_demand)
         scores_full = transformer_full.fit_transform(sd_smooth)
 
-    for K in trange(2, max_K):
+    for K in trange(2, max_K+1):
         if side == 'supply':
             K_supply, K_demand = K, 2
         else:
@@ -115,10 +115,10 @@ def compute_avg_curve_performance_metric(
         fd_true = curves_true.supply if side == "supply" else curves_true.demand
         for model, curves_pred in curves_pred_dict.items():
             fd_pred = curves_pred.supply if side == "supply" else curves_pred.demand
-            errors.loc[model, "MAE [GWh]"] = fmae(fd_true, fd_pred)
-            errors.loc[model, "RMSE [GWh]"] = np.sqrt(fmse(fd_true, fd_pred))
-            errors.loc[model, "MAPE [%]"] = 100 * fmape(fd_true, fd_pred)
-        errors["rMAE"] = errors["MAE [GWh]"] / errors.loc["Naive", "MAE [GWh]"]
+            errors.loc[model, "FMAE [GWh]"] = fmae(fd_true, fd_pred)
+            errors.loc[model, "FRMSE [GWh]"] = np.sqrt(fmse(fd_true, fd_pred))
+            errors.loc[model, "FMAPE [%]"] = 100 * fmape(fd_true, fd_pred)
+        errors["rFMAE"] = errors["FMAE [GWh]"] / errors.loc["Naive", "FMAE [GWh]"]
         errors_dict[side] = errors
     return errors_dict
 
