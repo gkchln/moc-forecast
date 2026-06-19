@@ -267,7 +267,8 @@ prob_point_model = {
 }
 
 # Source data
-curves_path = join('data', 'processed', market, 'sdts.pkl')
+# curves_path = join('data', 'processed', market, 'sdts.pkl')
+curves_path = join('data', 'processed', market, 'sdts_opt_full.pkl')
 prices_path = join('data', 'processed', market, 'price.csv')
 
 # Output folders
