@@ -32,40 +32,40 @@ from src.evaluation import (
 
 # --------- Choose market ---------- # 
 
-market = 'EPEX-FR' # GME, EPEX-DE-LU, EPEX-FR
+market = 'GME' # GME, EPEX-DE-LU, EPEX-FR
 
 
 # --------- Market config ---------- # 
 
-# K_market = {
-#     'GME': {
-#         'FPCA': (5, 4),
-#         'ZST': (8, 5)
-#     },
-#     'EPEX-DE-LU': {
-#         'FPCA': (5, 6),
-#         'ZST': (6, 8)
-#     },
-#     'EPEX-FR': {
-#         'FPCA': (7, 5),
-#         'ZST': (10, 7)
-#     },
-# }
-
 K_market = {
     'GME': {
-        'FPCA': (8, 10),
-        'ZST': (17, 10)
+        'FPCA': (5, 4),
+        'ZST': (8, 5)
     },
     'EPEX-DE-LU': {
-        'FPCA': (6, 9),
-        'ZST': (10, 11)
+        'FPCA': (5, 6),
+        'ZST': (6, 8)
     },
     'EPEX-FR': {
-        'FPCA': (9, 10),
-        'ZST': (9, 12)
+        'FPCA': (7, 5),
+        'ZST': (10, 7)
     },
 }
+
+# K_market = {
+#     'GME': {
+#         'FPCA': (8, 10),
+#         'ZST': (17, 10)
+#     },
+#     'EPEX-DE-LU': {
+#         'FPCA': (6, 9),
+#         'ZST': (10, 11)
+#     },
+#     'EPEX-FR': {
+#         'FPCA': (9, 10),
+#         'ZST': (9, 12)
+#     },
+# }
 
 fpc_multiple = {
     'GME': {
@@ -267,8 +267,7 @@ prob_point_model = {
 }
 
 # Source data
-# curves_path = join('data', 'processed', market, 'sdts.pkl')
-curves_path = join('data', 'processed', market, 'sdts_opt_full.pkl')
+curves_path = join('data', 'processed', market, 'sdts.pkl')
 prices_path = join('data', 'processed', market, 'price.csv')
 
 # Output folders
@@ -360,8 +359,9 @@ for side in ['supply', 'demand']:
 
 for kind in ['curve_ev', 'curve_mae', 'mcp_mae']:
     outfile = join(plots_folder, f'approx_{kind}_{market.lower()}.png')
+    ref_components = {key.lower(): value for key, value in K_market[market].items()}
     fig = plot_cumulative_approx_error(metrics, kind, figsize=(8, 3), sharex=True, sharey=True,
-                                       savefig=True, path=outfile)
+                                       ref_components=ref_components, savefig=True, path=outfile)
     plt.close(fig)
     print(f"✅ Successfully generated {outfile}")
 
