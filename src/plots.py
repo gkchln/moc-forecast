@@ -162,7 +162,7 @@ def plot_fpca_cumulative_variance(
 
 
 
-def plot_cumulative_approx_error(metrics, kind, savefig=False, path=None, **subplots_kwargs):
+def plot_cumulative_approx_error(metrics, kind, savefig=False, path=None, ref_components=None, **subplots_kwargs):
     """Plot cumulative approximation error curves for supply and demand.
 
     The function plots either explained variance, functional MAE, or clearing price MAE
@@ -174,6 +174,11 @@ def plot_cumulative_approx_error(metrics, kind, savefig=False, path=None, **subp
         kind: Metric type to plot: 'curve_ev', 'curve_mae', or 'mcp_mae'.
         savefig: If True, save the figure to the given path.
         path: File path where the figure will be saved.
+        ref_components: Optional dict mapping trans_type to a (Ks, Kd) tuple, e.g.
+            {"fpca": (Ks, Kd), "zst": (Ks, Kd)}. For each trans_type, draws a vertical
+            dashed line at the supply (index 0) or demand (index 1) K value and a
+            horizontal line at the corresponding metric value, both in the same color
+            as the trans_type curve.
         **subplots_kwargs: Additional kwargs passed to plt.subplots().
 
     Returns:
@@ -192,8 +197,16 @@ def plot_cumulative_approx_error(metrics, kind, savefig=False, path=None, **subp
         for trans_type in ['fpca', 'zst']:
             metric = np.array(metrics[side][trans_type][kind])
             metric = 100 * metric if kind == 'curve_ev' else metric
-            axes[i].plot(range(2, len(metric) + 2), metric, marker='o', label=trans_type.upper())
-            axes[i].grid(True, linestyle='--', alpha=0.5)
+            (line,) = axes[i].plot(range(2, len(metric) + 2), metric, marker='o', label=trans_type.upper())
+
+            if ref_components is not None and trans_type in ref_components:
+                k = ref_components[trans_type][i]  # Ks when i==0, Kd when i==1
+                metric_at_k = metric[k - 2]        # metric is 0-indexed from K=2
+                color = line.get_color()
+                axes[i].axvline(k, color=color, linestyle='--', alpha=1, linewidth=1)
+                axes[i].axhline(metric_at_k, color=color, linestyle='--', alpha=1, linewidth=1)
+
+        axes[i].grid(True, linestyle='--', alpha=0.5)
         axes[i].xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
         if i == 0:
             axes[i].set_ylabel(ylabel)
