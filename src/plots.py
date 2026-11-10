@@ -598,7 +598,9 @@ def plot_hourly_avg_error(
         savefig=False,
         path=None,
         nrows=2,
-        figsize=(8, 4)
+        figsize=(8, 4),
+        show_true_prices=True,
+        price_percentiles=(0.1, 0.9),
     ):
     hourly_avg_errors = pd.DataFrame(index=range(24), columns=models_order)
 
@@ -624,6 +626,35 @@ def plot_hourly_avg_error(
     linestyles = itertools.cycle(linestyle_list)
 
     fig, ax = plt.subplots(figsize=figsize)
+    ax2 = None
+
+    if show_true_prices:
+        p_low, p_high = price_percentiles
+        grouped_true = prices_true.groupby(prices_true.index.hour)
+        hourly_price_mean = grouped_true.mean()
+        hourly_price_p_low = grouped_true.quantile(p_low)
+        hourly_price_p_high = grouped_true.quantile(p_high)
+
+        ax2 = ax.twinx()
+        ax2.plot(
+            hourly_price_mean.index,
+            hourly_price_mean.values,
+            color='grey',
+            linewidth=1.5,
+            label='Avg. price',
+            zorder=2
+        )
+        ax2.fill_between(
+            hourly_price_p_low.index,
+            hourly_price_p_low.values,
+            hourly_price_p_high.values,
+            color='grey',
+            alpha=0.2,
+            label=f'{int(p_low*100)}-{int(p_high*100)}% pct.',
+            zorder=1
+        )
+        ax2.set_ylabel('Price [€/MWh]', color='grey')
+        ax2.tick_params(axis='y', labelcolor='grey')
 
     for model in models_order:
         ax.plot(
@@ -632,7 +663,8 @@ def plot_hourly_avg_error(
             label=model,
             marker=next(markers),
             linestyle=next(linestyles),
-            linewidth=1
+            linewidth=1,
+            zorder=3
         )
 
     ylabel = 'RMSE [€/MWh]' if error_type_point == "l2" else 'MAE [€/MWh]'
@@ -642,8 +674,24 @@ def plot_hourly_avg_error(
         ax.set_ylabel('Avg. CRPS')
     else:
         ax.set_ylabel(ylabel)
-    ax.legend(loc='upper center', bbox_to_anchor=(0.5, 1.3),
-              ncol=math.ceil(len(models_order) / nrows), frameon=False)
+
+    if show_true_prices:
+        # Keep error lines/markers on top of shaded area
+        ax.set_zorder(ax2.get_zorder() + 1)
+        ax.patch.set_visible(False)
+
+        # Merge legends from both axes
+        lines1, labels1 = ax.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax.legend(
+            lines1 + lines2, labels1 + labels2,
+            loc='upper center', bbox_to_anchor=(0.5, 1.3),
+            ncol=math.ceil((len(models_order) + 2) / nrows), frameon=False
+        )
+    else:
+        ax.legend(loc='upper center', bbox_to_anchor=(0.5, 1.3),
+                  ncol=math.ceil(len(models_order) / nrows), frameon=False)
+
     ax.grid(True, linestyle='--', alpha=0.5)
 
     if savefig and path is not None:
@@ -655,7 +703,8 @@ def plot_hourly_avg_error(
     return hourly_avg_errors
 
 
-def plot_price_scatter(prices_true, prices_pred, models, savefig=False, path=None, figsize=(16, 4), nrows=1):
+def plot_price_scatter(prices_true, prices_pred, models, savefig=False,
+                       path=None, figsize=(16, 4), nrows=1, wspace=0, **kwargs):
     min_val = min(prices_true.min(), prices_pred['FPCA-VARX'].min())
     max_val = max(prices_true.max(), prices_pred['FPCA-VARX'].max())
     ncols = len(models) // nrows
@@ -664,15 +713,17 @@ def plot_price_scatter(prices_true, prices_pred, models, savefig=False, path=Non
     for k, model in enumerate(models):
         i = k // ncols
         j = k % ncols
-        axes[i, j].scatter(prices_true, prices_pred[model], alpha=0.5, s=10, label=model)
+        axes[i, j].scatter(prices_true, prices_pred[model], label=model, **kwargs)
         axes[i, j].grid(True, linestyle='--', alpha=0.5)
         axes[i, j].plot([min_val, max_val], [min_val, max_val], color='red', linestyle='--', linewidth=1, label=None)
-        # axes[i, j].set_aspect('equal', adjustable='box')
+        axes[i, j].set_aspect('equal', adjustable='box')
         axes[i, j].set_title(model)
         if j == 0:
             axes[i, j].set_ylabel('Predicted Prices [€/MWh]')
         if i == nrows - 1:
             axes[i, j].set_xlabel('True Prices [€/MWh]')
+
+    fig.subplots_adjust(wspace=wspace)
 
     if savefig and path is not None:
         plt.savefig(path, dpi=300, bbox_inches="tight")
