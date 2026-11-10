@@ -156,7 +156,7 @@ if __name__ == "__main__":
     parser.add_argument("--K_supply", dest="K_supply", type=int, help="Number of supply curves features")
     parser.add_argument("--K_demand", dest="K_demand", type=int, help="Number of demand curves features")
     parser.add_argument("--transformer", dest="transformer", choices=["fpca", "zst"], help="Curve transformer to use ('fpca' or 'zst')")
-    parser.add_argument("--transformer_type", dest="transformer_type", choices=["static", "dynamic"], default="static",
+    parser.add_argument("--transformer_type", dest="transformer_type", choices=["static", "dynamic"], default="dynamic",
                         help="Whether to refit the tranformer every day (dynamic) or fit once on initial calibration window (static)")
     parser.add_argument("--autocorr_structure", dest="autocorr_structure", choices=["concurrent", "full"],
                         help="Autocorrelation structure ('concurrent' or 'full')")
