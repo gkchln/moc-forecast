@@ -319,27 +319,31 @@ export MARKET=GME
 export K_SUPPLY=5
 export K_DEMAND=4
 export TRANSFORMER=fpca
+export TRANS_TYPE=dynamic
 export AUTOCORR_STRUCTURE=concurrent
 export CROSSCORR_STRUCTURE=none
 ```
 Then run the script:
 ```bash
-python -m scripts.curve_based.point_forecast --endog_path "data/processed/${MARKET}/sdts.pkl" --exog_path "data/processed/${MARKET}/predictors.csv" --save_folder "data/output/${MARKET}/curve_based" --K_supply $K_SUPPLY --K_demand $K_DEMAND --transformer $TRANSFORMER --autocorr_structure $AUTOCORR_STRUCTURE --crosscorr_structure $CROSSCORR_STRUCTURE --progress
+python -m scripts.curve_based.point_forecast --endog_path "data/processed/${MARKET}/sdts.pkl" --exog_path "data/processed/${MARKET}/predictors.csv" --save_folder "data/output/${MARKET}/curve_based" --K_supply $K_SUPPLY --K_demand $K_DEMAND --transformer $TRANSFORMER --transformer_type $TRANS_TYPE --autocorr_structure $AUTOCORR_STRUCTURE --crosscorr_structure $CROSSCORR_STRUCTURE --progress
 ```
 Except for ARX, the script should use NumPy's built-in multithreading so running jobs in parallel won't make much difference in total execution time, compared with with running them in sequence on a machine with <12 cores.
 
-Alternatively, it is possible to use the batch script, which runs all four VAR models (ARX, VARX, fARX, fVARX) in parallel to reduce the number of runs from 24 to 6:
+Alternatively, it is possible to use the batch script, which runs all four VAR models (ARX, VARX, fARX, fVARX) in parallel to reduce the number of runs from 24 to 6 (~1h per run):
 
 ```bash
 export MARKET=GME
 export K_SUPPLY=5
 export K_DEMAND=4
 export TRANSFORMER=fpca
+export TRANS_TYPE=dynamic
 export N_PARALLEL=4
 export N_THREADS=2
 
-bash scripts/curve_based/batch_point_forecast.sh "$MARKET" "$TRANSFORMER" "$K_SUPPLY" "$K_DEMAND" "$N_PARALLEL" "$N_THREADS"
+bash scripts/curve_based/batch_point_forecast.sh "$MARKET" "$TRANSFORMER" "$TRANS_TYPE" "$K_SUPPLY" "$K_DEMAND" "$N_PARALLEL" "$N_THREADS"
 ```
+
+Each job has its own log file in `data/output/${MARKET}/curve_based/_logs/`
 
 The outputs of `point_forecast.py` are:
 -  Out-of-sample curves forecasts as a serialized `curves.SupplyDemandTimeSeries` instance (pickle file) for 2024 at `data/output/${MARKET}/curve_based/curves/`. Check `point_forecast.py` if you want to understand the naming logic.
