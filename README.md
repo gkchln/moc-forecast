@@ -277,8 +277,8 @@ python -m scripts.preprocess_data
 ### 4. Curves forecast (1 year backtest with rolling forecast origin)
 
 Two options are available:
-1. The first one (_light_ version) is to run backtests for all FPCA and ZST models for one $K_s, K_d$ pair only (which can however be different between FPCA and ZST, see table below). This allows to reproduce all results but that of section 3.5.
-2. The second one (_full_ version) is to run backtests for all FPCA and ZST models for all $K_s, K_d$ pairs, which is necessary to replicate the results presented in section 3.5 of the paper. We strongly encourage the use of a **HPC cluster** and the batch jobs scripts in case this option is chosen.
+1. The first one (_light_ version, recommended) is to run backtests for all FPCA and ZST models for one $K_s, K_d$ pair only (which can however be different between FPCA and ZST, see table below). This allows to reproduce all results except those of section 3.5 (sensitivity analysis to $K_s, K_d$).
+2. The second one (_full_ version) is to run backtests for all FPCA and ZST models for _all_ $K_s, K_d$ pairs, which allows to replicate all paper results, including those of section 3.5. This option implies highly intensive and time-consuming calculations so we strongly encourage the use of a **HPC cluster** and the batch jobs scripts in case this option is chosen. Note that the running time amounts to ~1-2 days with 6 nodes of 96 cores each.
 
 #### 4.a. Light version
 
