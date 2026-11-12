@@ -128,3 +128,4 @@ fi
 # ---------------------------
 echo "[INFO] Running with N_PARALLEL=$N_PARALLEL, N_THREADS=$N_THREADS ..."
 gen_combinations | xargs -P "$N_PARALLEL" -I {} bash -c 'run_one "{}"'
+echo "Done."
