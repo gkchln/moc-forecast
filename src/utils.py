@@ -44,7 +44,7 @@ def get_dst_transition_days(start_year, end_year, timezone='Europe/Rome'):
 hour_gain_days, hour_loss_days = get_dst_transition_days(2000, 2035) # WARNING: Hard-coded
 
 
-def fix_daylight_saving_time(input_df):
+def fix_daylight_saving_time(input_df: pd.DataFrame) -> pd.DataFrame:
     """
     Fixes the daylight saving time in a DataFrame with a DatetimeIndex. It removes duplicate rows corresponding to the additional 02:00-03:00
     hour interval in gain days and fills out missing hours in hour loss days.
@@ -147,6 +147,16 @@ def find_nan_ranges(df):
     return nan_periods
 
 
+def trapezoidal_weights(grid: np.ndarray) -> np.ndarray:
+    """Compute trapezoidal integration weights for a 1D grid."""
+    deltas = np.diff(grid)
+    return np.concatenate([
+        [deltas[0] / 2],
+        (deltas[:-1] + deltas[1:]) / 2,
+        [deltas[-1] / 2]
+    ])
+
+
 def find_zeros(x, y):
     """
     Find the zeros of a function given sampled x and y values.
@@ -225,6 +235,14 @@ def get_inverse_function(x_values, y_values):
         - The caller is responsible for ensuring x_values and y_values are aligned and
           convertible to numeric arrays suitable for scipy.interpolate.interp1d.
     """
+    x_values = np.asarray(x_values)
+    y_values = np.asarray(y_values)
+
+    # Drop repeated y values, preserving order (safe for increasing or decreasing)
+    mask = np.concatenate(([True], np.diff(y_values) != 0))
+    x_values = x_values[mask]
+    y_values = y_values[mask]
+    
     assert is_strictly_monotonic(y_values)
     return interp1d(y_values, x_values, bounds_error=False, fill_value="extrapolate")
 

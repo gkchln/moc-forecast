@@ -15,6 +15,12 @@ import argparse
 LAGS_ENDOG = [1, 2, 3, 7]
 LAGS_EXOG = [0, 1, 7]
 EXOG_STRUCTURE = 'concurrent'
+EXOG_USE = {
+    'Load': {"lags": LAGS_EXOG, "structure": EXOG_STRUCTURE},
+    'RES': {"lags": LAGS_EXOG, "structure": EXOG_STRUCTURE},
+    'NTC FR > IT': {"lags": LAGS_EXOG, "structure": EXOG_STRUCTURE},
+    'NTC CH > IT': {"lags": LAGS_EXOG, "structure": EXOG_STRUCTURE},
+}
 CRITERION = 'aic'
 RANDOM_STATE = 42
 
@@ -26,24 +32,27 @@ def main(
         K_demand,
         choice_K,
         transformer,
+        transformer_type,
         autocorr_structure,
         crosscorr_structure,
         calibration_window,
         test_start_date,
         test_end_date,
-        show_progress=False
+        save_forecaster_only=False,
+        show_progress=False,
     ):
     """Run the daily recalibration forecast pipeline."""
 
     ### Setup logging ###
     run_name = "{autocorr_struc}_{crosscorr_struc}_{lags_endog}_{exog_struc}_{lags_exog}_{transformer}" \
-    "_{K_supply}_{K_demand}_{choice_K}_{calib_wind}_{criterion}_{test_start}_{test_end}".format(
+    "_{trans_type}_{K_supply}_{K_demand}_{choice_K}_{calib_wind}_{criterion}_{test_start}_{test_end}".format(
         autocorr_struc = str(autocorr_structure).lower()[:4], # 'conc' or 'full'
         crosscorr_struc = str(crosscorr_structure).lower()[:4], # 'conc', 'full' or 'none'
         lags_endog = ''.join(map(str, LAGS_ENDOG)), # e.g. '1237' for lags 1, 2, 3 and 7
         exog_struc = str(EXOG_STRUCTURE).lower()[:4], # 'conc' or 'full'
         lags_exog = ''.join(map(str, LAGS_EXOG)), # e.g. '017' for lags 0, 1 and 7
         transformer = transformer, # 'fpca' or 'zst'
+        trans_type = transformer_type, # 'static' or 'dynamic'
         K_supply = K_supply or 'none',
         K_demand = K_demand or 'none',
         choice_K = choice_K or 'none',
@@ -92,40 +101,48 @@ def main(
     ### Forecast ###
     model = LassoVARX(
         lags_endog=LAGS_ENDOG,
-        lags_exog=LAGS_EXOG,
         autocorr_structure=autocorr_structure,
         crosscorr_structure=crosscorr_structure,
-        exog_structure=EXOG_STRUCTURE,
+        exog_use=EXOG_USE,
         calibration_window=calibration_window,
         criterion=CRITERION,
         random_state=RANDOM_STATE,
         n_jobs=-1,
     )
 
+    if transformer_type == "dynamic":
+        recalibrate_transformer = True
+    else:
+        recalibrate_transformer = False
+
     forecaster = SupplyDemandForecaster(
         model,
         transformer=transformer,
         choice_K=choice_K,
         K_supply=K_supply,
-        K_demand=K_demand
+        K_demand=K_demand,
+        recalibrate_transformer=recalibrate_transformer
     )
 
     sd_pred = forecaster.fit_forecast_rolling(sd, exog, test_start_date, show_progress=show_progress)
 
+    ### Log MCP MAE ###
     prices_pred = sd_pred.get_clearing_prices()
     prices_true = sd.get_clearing_prices()
+    logging.info("MCP MAE: {:.2f}€/MWh".format((prices_true - prices_pred).abs().mean()))
 
     ### Save results ###
-    logging.info("MAE: {:.2f}€/MWh".format((prices_true - prices_pred).abs().mean()))
     curves_folder = join(save_folder, 'curves')
-    price_folder = join(save_folder, 'prices')
     forecasters_folder = join(save_folder, 'forecasters')
     os.makedirs(curves_folder, exist_ok=True)
-    os.makedirs(price_folder, exist_ok=True)
     os.makedirs(forecasters_folder, exist_ok=True)
-    sd_pred.to_pickle(join(curves_folder, f'{run_name}.pkl'))
-    prices_pred.to_csv(join(price_folder, f'{run_name}.csv'), index=True)
-    forecaster.to_pickle(join(forecasters_folder, f'{run_name}.pkl'))
+    if not save_forecaster_only:
+        curves_outfile = join(curves_folder, f'{run_name}.pkl')
+        sd_pred.to_pickle(curves_outfile)
+        logging.info("Saved curves to {}".format(curves_outfile))
+    forecaster_outfile = join(forecasters_folder, f'{run_name}.pkl')
+    forecaster.to_pickle(forecaster_outfile)
+    logging.info("Saved forecaster to {}".format(forecaster_outfile))
 
     logging.info(f"Done.")
 
@@ -139,6 +156,8 @@ if __name__ == "__main__":
     parser.add_argument("--K_supply", dest="K_supply", type=int, help="Number of supply curves features")
     parser.add_argument("--K_demand", dest="K_demand", type=int, help="Number of demand curves features")
     parser.add_argument("--transformer", dest="transformer", choices=["fpca", "zst"], help="Curve transformer to use ('fpca' or 'zst')")
+    parser.add_argument("--transformer_type", dest="transformer_type", choices=["static", "dynamic"], default="dynamic",
+                        help="Whether to refit the tranformer every day (dynamic) or fit once on initial calibration window (static)")
     parser.add_argument("--autocorr_structure", dest="autocorr_structure", choices=["concurrent", "full"],
                         help="Autocorrelation structure ('concurrent' or 'full')")
     parser.add_argument("--crosscorr_structure", dest="crosscorr_structure", choices=["concurrent", "full", "none"],
@@ -148,9 +167,13 @@ if __name__ == "__main__":
     parser.add_argument("--calib_window", dest="calibration_window", type=int, help="Calibration window in days", default=364)
     parser.add_argument("--start_date", dest="test_start_date", type=int, help="Test start date in YYYYMMDD format", default=20240101)
     parser.add_argument("--end_date", dest="test_end_date", type=int, help="Test end date in YYYYMMDD format", default=20241231)
+    parser.add_argument("--save_forecaster_only", dest="save_forecaster_only", action="store_true", help="Wether to save forecaster only (True) or both forecaster and curves")
     parser.add_argument("--progress", dest="show_progress", action="store_true", help="Show progress daily recalibration progress bar")
 
     args = parser.parse_args()
+
+    if args.choice_K == "none" and (args.K_supply is None or args.K_demand is None):
+        parser.error("--K_supply and --K_demand are required when --choice_K is 'none'")
 
     if args.crosscorr_structure == "none":
         args.crosscorr_structure = None
@@ -173,12 +196,14 @@ if __name__ == "__main__":
         args.K_demand,
         args.choice_K,
         args.transformer,
+        args.transformer_type,
         args.autocorr_structure,
         args.crosscorr_structure,
         args.calibration_window,
         args.test_start_date,
         args.test_end_date,
-        args.show_progress
+        args.save_forecaster_only,
+        args.show_progress,
     )
 
 

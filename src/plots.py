@@ -1,8 +1,11 @@
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 import seaborn as sns
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
+import matplotlib.ticker as ticker
+from matplotlib.legend_handler import HandlerTuple
 from cycler import cycler
 import datetime as dt
 import pandas as pd
@@ -13,10 +16,11 @@ import math
 from typing import Dict, Tuple, Any, Union
 from scipy.stats import pearsonr, spearmanr
 from statsmodels.nonparametric.smoothers_lowess import lowess
+from statsmodels.stats.multitest import multipletests
 from skfda.representation import FDataGrid
 from skfda.exploratory.visualization import FPCAPlot
 from skfda.preprocessing.dim_reduction import FPCA
-from skfda.misc.scoring import r2_score
+from skfda.misc.scoring import r2_score as fr2, mean_absolute_error as fmae, mean_squared_error as fmse, mean_absolute_percentage_error as fmape
 
 from .curves import SupplyDemandFPCA, SupplyDemandTimeSeries
 from .forecasters import SupplyDemandForecaster
@@ -92,6 +96,39 @@ def format_heatmap_latex_table(
     return latex_rows
 
 
+def format_heatmap_df(df, decimals, invert_cmap=False, per_column=True):
+    if isinstance(decimals, int):
+        decimals = dict(zip(df.columns, [decimals] * df.shape[1]))
+
+    def get_color(val, min_val, max_val):
+        norm = (val - min_val) / (max_val - min_val)
+        if invert_cmap:
+            norm = 1 - norm
+        if norm < 0.5:
+            t = norm / 0.5
+            r = int(218 + t * (248 - 218))
+            g = int(134 + t * (215 - 134))
+            b = int(118 + t * (120 - 118))
+        else:
+            t = (norm - 0.5) / 0.5
+            r = int(248 + t * (113 - 248))
+            g = int(215 + t * (185 - 215))
+            b = int(120 + t * (142 - 120))
+        return f"background-color: rgb({r},{g},{b})"
+
+    def style_func(df):
+        styles = pd.DataFrame("", index=df.index, columns=df.columns)
+        for col in df.columns:
+            min_val = df[col].min() if per_column else df.min(axis=None)
+            max_val = df[col].max() if per_column else df.max(axis=None)
+            for idx in df.index:
+                styles.loc[idx, col] = get_color(df.loc[idx, col], min_val, max_val)
+        return styles
+
+    fmt = {col: f"{{:.{decimals[col]}f}}" for col in df.columns}
+    return df.style.apply(style_func, axis=None).format(fmt)
+
+
 
 
 # -------------------------
@@ -124,7 +161,66 @@ def plot_fpca_cumulative_variance(
     return fig
 
 
-import matplotlib.dates as mdates
+
+def plot_cumulative_approx_error(metrics, kind, savefig=False, path=None, ref_components=None, **subplots_kwargs):
+    """Plot cumulative approximation error curves for supply and demand.
+
+    The function plots either explained variance, functional MAE, or clearing price MAE
+    for FPCA and ZST approximations across a range of component counts. It takes as
+    input the output of src.evaluation.compute_approx_metrics().
+
+    Args:
+        metrics: Nested dict of metrics produced by compute_approx_metrics.
+        kind: Metric type to plot: 'curve_ev', 'curve_mae', or 'mcp_mae'.
+        savefig: If True, save the figure to the given path.
+        path: File path where the figure will be saved.
+        ref_components: Optional dict mapping trans_type to a (Ks, Kd) tuple, e.g.
+            {"fpca": (Ks, Kd), "zst": (Ks, Kd)}. For each trans_type, draws a vertical
+            dashed line at the supply (index 0) or demand (index 1) K value and a
+            horizontal line at the corresponding metric value, both in the same color
+            as the trans_type curve.
+        **subplots_kwargs: Additional kwargs passed to plt.subplots().
+
+    Returns:
+        The created matplotlib Figure object.
+    """
+    fig, axes = plt.subplots(1, 2, **subplots_kwargs)
+
+    if kind == 'curve_ev':
+        ylabel = "Explained Variance [%]"
+    elif kind == 'curve_mae':
+        ylabel = 'MAE [GWh]'
+    else:
+        ylabel = 'MAE [€/MWh]'
+
+    for i, side in enumerate(['supply', 'demand']):
+        for trans_type in ['fpca', 'zst']:
+            metric = np.array(metrics[side][trans_type][kind])
+            metric = 100 * metric if kind == 'curve_ev' else metric
+            (line,) = axes[i].plot(range(2, len(metric) + 2), metric, marker='o', label=trans_type.upper())
+
+            if ref_components is not None and trans_type in ref_components:
+                k = ref_components[trans_type][i]  # Ks when i==0, Kd when i==1
+                metric_at_k = metric[k - 2]        # metric is 0-indexed from K=2
+                color = line.get_color()
+                axes[i].axvline(k, color=color, linestyle='--', alpha=1, linewidth=1)
+                axes[i].axhline(metric_at_k, color=color, linestyle='--', alpha=1, linewidth=1)
+
+        axes[i].grid(True, linestyle='--', alpha=0.5)
+        axes[i].xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
+        if i == 0:
+            axes[i].set_ylabel(ylabel)
+        axes[i].set_xlabel(f'$K_{side[0]}$')
+        axes[i].legend()
+        axes[i].set_title(side.capitalize())
+
+    fig.subplots_adjust(wspace=0.1)
+
+    if savefig and path is not None:
+        plt.savefig(path, dpi=300, bbox_inches="tight")
+
+    return fig
+
 
 def plot_number_of_fpcs(
         forecaster: SupplyDemandForecaster,
@@ -195,9 +291,9 @@ def plot_dynamic_fpcs(
         forecaster: SupplyDemandForecaster,
         side: str,
         n_fpcs: int,
-        nrows=2,
-        xlim=(0, 300),
-        figsize=(11, 4.5),
+        nrows=1,
+        xlim=None,
+        figsize=None,
         cmap='viridis',
         colorbar=True,
         savefig=False,
@@ -227,17 +323,6 @@ def plot_dynamic_fpcs(
                 fpca = forecaster.transformers_[i].transformer_demand_
             fpc = fpca.components_[j]
 
-            # /!\ (Very) hotfix for managing arbitrary sign switches of FPCs /!\
-            if side == 'supply':
-                if j == 3 and fpc.data_matrix[0, 0, 0] > 0:
-                    fpc = -fpc
-                elif j == 4 and fpc.data_matrix[0, -1, 0] > 0:
-                    fpc = -fpc
-                elif j == 5 and fpc.data_matrix[0, 0, 0] < 0:
-                    fpc = -fpc
-                elif j == 7 and fpc.data_matrix[0, 100, 0] > 0:
-                    fpc = -fpc
-
             ax = axes[j // ncols, j % ncols]
             fpc.plot(axes=ax, color=color, linewidth=0.2)
 
@@ -266,7 +351,7 @@ def plot_dynamic_fpcs(
         sm = cm.ScalarMappable(cmap=cmap, norm=norm)
         sm.set_array([])
 
-        cax = fig.add_axes([0.3, 1.05, 0.4, 0.03])
+        cax = fig.add_axes([0.3, 1.2, 0.4, 0.03])
         cbar = fig.colorbar(sm, cax=cax, orientation="horizontal")
 
         cbar.set_ticks(tick_positions)
@@ -294,12 +379,14 @@ def plot_dynamic_fpcs(
 # Curves plots
 # -------------------------
 
-def plot_r2_score(
+def plot_functional_performance_metric(
         curves_pred: Dict[str, SupplyDemandTimeSeries],
         curves_true: SupplyDemandTimeSeries,
+        metric: str = 'mae',
         models_order: list[str] | None = None,
         models_style: Dict[str, Dict[str, Any]] = None,
         figsize: Tuple[int, int] = (8, 3),
+        show_legend: bool = True,
         nrows_legend: int = 1,
         savefig: bool = False,
         path: str | None = None
@@ -312,25 +399,45 @@ def plot_r2_score(
         models = curves_pred.keys()
 
     for model in models:
-        score_supply = r2_score(curves_true.supply, curves_pred[model].supply, multioutput='raw_values')
-        score_demand = r2_score(curves_true.demand, curves_pred[model].demand, multioutput='raw_values')
+
+        if metric == 'mae':
+            score_supply = fmae(curves_true.supply, curves_pred[model].supply, multioutput='raw_values')
+            score_demand = fmae(curves_true.demand, curves_pred[model].demand, multioutput='raw_values')
+            axes[0].set_ylabel('MAE [GWh]')
+        elif metric == 'rmse':
+            score_supply = np.sqrt(fmse(curves_true.supply, curves_pred[model].supply, multioutput='raw_values'))
+            score_demand = np.sqrt(fmse(curves_true.demand, curves_pred[model].demand, multioutput='raw_values'))
+            axes[0].set_ylabel('RMSE [GWh]')
+        elif metric == 'mape':
+            score_supply = 100 * fmape(curves_true.supply, curves_pred[model].supply, multioutput='raw_values')
+            score_demand = 100 * fmape(curves_true.demand, curves_pred[model].demand, multioutput='raw_values')
+            axes[0].set_ylabel('MAPE [%]')
+        elif metric == 'r2':
+            score_supply = fr2(curves_true.supply, curves_pred[model].supply, multioutput='raw_values')
+            score_demand = fr2(curves_true.demand, curves_pred[model].demand, multioutput='raw_values')
+            axes[0].set_ylabel('$R^2$')
+        else:
+            raise ValueError(f"Metric should be either 'mae', 'rmse', 'mape' or 'r2'. Got: '{metric}'")
+        
         if models_style:
             style = models_style[model]
             kwargs = {'color': style['color'], 'linestyle': style['linestyle']}
         else:
             kwargs = {}
+
         score_supply.plot(axes=axes[0], label=model, **kwargs)
         score_demand.plot(axes=axes[1], label=model, **kwargs)
 
     axes[0].set_title('Supply')
     axes[1].set_title('Demand')
-    axes[0].set_ylabel('$R^2$ score')
     axes[0].set_xlabel('Price [€/MWh]')
     axes[1].set_xlabel('Price [€/MWh]')
     axes[0].grid(True, linestyle='--', alpha=0.5)
     axes[1].grid(True, linestyle='--', alpha=0.5)
-    fig.legend(labels=models, loc='upper center', bbox_to_anchor=(0.5, 1.2),
-               ncol=len(models) / nrows_legend, frameon=False)
+
+    if show_legend:
+        fig.legend(labels=models, loc='upper center', bbox_to_anchor=(0.5, 1.2),
+                ncol=math.ceil(len(models) / nrows_legend), frameon=False)
     if savefig:
         plt.savefig(path, dpi=300, bbox_inches="tight")
 
@@ -344,6 +451,7 @@ def plot_curves_price_prediction(
         figsize=(4, 3),
         axis_fontsize=12,
         text_fontsize=12,
+        top_ylim=70,
         path=None,
         savefig=False
     ):
@@ -365,13 +473,108 @@ def plot_curves_price_prediction(
     plt.xticks(fontsize=axis_fontsize)
     plt.xlabel('Price [€/MWh]', fontsize=axis_fontsize)
     plt.yticks(fontsize=axis_fontsize)
-    plt.ylim(top=70)
+    plt.ylim(top=top_ylim)
 
     plt.title(timestamp, fontsize=text_fontsize)
     plt.text(0.8, 0.93, f'Actual: {price_true:.0f} €/MWh', ha='right', va='center',
              transform=plt.gca().transAxes, fontsize=text_fontsize, color=colors[0], weight='semibold')
     plt.text(0.8, 0.84, f'Predicted: {price_pred:.0f} €/MWh', ha='right', va='center',
              transform=plt.gca().transAxes, fontsize=text_fontsize, color=colors[1], weight='semibold')
+
+    if savefig and path is not None:
+        plt.savefig(path, dpi=300, bbox_inches='tight')
+    else:
+        plt.show()
+
+    return fig
+
+
+
+def plot_performance_per_nb_of_components(
+        error_df: pd.DataFrame,
+        metric: str = 'mae',
+        models_order: list[str] | None = None,
+        models_style: Dict[str, Dict[str, Any]] = None,
+        base_n_comp: Dict[str, int] | None = None,
+        figsize: Tuple[int, int] = (8, 3),
+        nrows_legend: int = 1,
+        savefig: bool = False,
+        path: str | None = None
+    ):
+    fig, ax = plt.subplots(figsize=figsize)
+
+    if models_order:
+        models = models_order
+    else:
+        models = error_df.keys()
+
+    linestyle_to_marker = {'-': 'o', '--': 'D', ':': '^', '-.': 's'}
+
+    for model in models:
+
+        if metric == 'mae':
+            ax.set_ylabel('MAE [GWh]')
+        elif metric == 'rmse':
+            ax.set_ylabel('RMSE [GWh]')
+        elif metric == 'mape':
+            ax.set_ylabel('MAPE [%]')
+        elif metric == 'r2':
+            ax.set_ylabel('$R^2$')
+        elif metric == 'mae_mcp':
+            ax.set_ylabel('MAE [€/MWh]')
+        elif metric == 'rmse_mcp':
+            ax.set_ylabel('RMSE [€/MWh]')
+        elif metric == 'r2_mcp':
+            ax.set_ylabel('$R^2$')
+        else:
+            raise ValueError(f"Metric should be either 'mae', 'mse', 'mape', 'r2', 'mae_mcp', 'rmse_mcp', 'r2_mcp'. Got: '{metric}'")
+
+        if models_style:
+            style = models_style[model]
+            kwargs = {'color': style['color'], 'linestyle': style['linestyle']}
+        else:
+            kwargs = {}
+
+        error_df[model].plot(ax=ax, label=model, marker=None, **kwargs)
+
+        if base_n_comp and model in base_n_comp:
+            n_comp = base_n_comp[model]
+            y_val = error_df[model].loc[n_comp]
+            linestyle = kwargs.get('linestyle', '-')
+            marker = linestyle_to_marker.get(linestyle, 'o')
+            ax.plot(n_comp, y_val,
+                    color=kwargs.get('color', None),
+                    marker=marker,
+                    zorder=5,
+                    label='_nolegend_')
+
+        ax.grid(True, linestyle='--', alpha=0.5)
+
+    ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
+
+    # Build combined line + marker legend handles
+    line_handles, _ = ax.get_legend_handles_labels()
+    combined_handles = []
+    for model, line in zip(models, line_handles):
+        linestyle = models_style[model]['linestyle'] if models_style else '-'
+        color = models_style[model]['color'] if models_style else line.get_color()
+        marker = linestyle_to_marker.get(linestyle, 'o')
+        if base_n_comp and model in base_n_comp:
+            marker_handle = plt.Line2D([0], [0], marker=marker, color=color,
+                                       linestyle='none', markersize=6)
+            combined_handles.append((line, marker_handle))
+        else:
+            combined_handles.append(line)
+
+    fig.legend(
+        handles=combined_handles,
+        labels=list(models),
+        handler_map={tuple: HandlerTuple(ndivide=None, pad=0)},
+        loc='upper center',
+        bbox_to_anchor=(0.5, 1.2),
+        ncol=len(models) / nrows_legend,
+        frameon=False
+    )
 
     if savefig and path is not None:
         plt.savefig(path, dpi=300, bbox_inches='tight')
@@ -391,9 +594,13 @@ def plot_hourly_avg_error(
         prices_pred: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
         forecast_type: str,
         models_order: list[str],
+        error_type_point="l1",
         savefig=False,
         path=None,
-        figsize=(8, 4)
+        nrows=2,
+        figsize=(8, 4),
+        show_true_prices=True,
+        price_percentiles=(0.1, 0.9),
     ):
     hourly_avg_errors = pd.DataFrame(index=range(24), columns=models_order)
 
@@ -408,7 +615,7 @@ def plot_hourly_avg_error(
         for model in models_order:
             abs_errors = prices_pred[model] - prices_true
             hourly_avg_errors[model] = abs_errors.groupby(abs_errors.index.hour).apply(
-                lambda x: x.abs().mean()
+                lambda x: np.sqrt((x**2).mean()) if error_type_point == "l2" else x.abs().mean()
             )
 
     # Marker and linestyle cycles
@@ -419,6 +626,35 @@ def plot_hourly_avg_error(
     linestyles = itertools.cycle(linestyle_list)
 
     fig, ax = plt.subplots(figsize=figsize)
+    ax2 = None
+
+    if show_true_prices:
+        p_low, p_high = price_percentiles
+        grouped_true = prices_true.groupby(prices_true.index.hour)
+        hourly_price_mean = grouped_true.mean()
+        hourly_price_p_low = grouped_true.quantile(p_low)
+        hourly_price_p_high = grouped_true.quantile(p_high)
+
+        ax2 = ax.twinx()
+        ax2.plot(
+            hourly_price_mean.index,
+            hourly_price_mean.values,
+            color='grey',
+            linewidth=1.5,
+            label='Avg. price',
+            zorder=2
+        )
+        ax2.fill_between(
+            hourly_price_p_low.index,
+            hourly_price_p_low.values,
+            hourly_price_p_high.values,
+            color='grey',
+            alpha=0.2,
+            label=f'{int(p_low*100)}-{int(p_high*100)}% pct.',
+            zorder=1
+        )
+        ax2.set_ylabel('Price [€/MWh]', color='grey')
+        ax2.tick_params(axis='y', labelcolor='grey')
 
     for model in models_order:
         ax.plot(
@@ -427,15 +663,35 @@ def plot_hourly_avg_error(
             label=model,
             marker=next(markers),
             linestyle=next(linestyles),
-            linewidth=1
+            linewidth=1,
+            zorder=3
         )
+
+    ylabel = 'RMSE [€/MWh]' if error_type_point == "l2" else 'MAE [€/MWh]'
 
     ax.set_xlabel('Hour of the day')
     if forecast_type == 'quantiles':
         ax.set_ylabel('Avg. CRPS')
     else:
-        ax.set_ylabel('MAE [€/MWh]')
-    ax.legend()
+        ax.set_ylabel(ylabel)
+
+    if show_true_prices:
+        # Keep error lines/markers on top of shaded area
+        ax.set_zorder(ax2.get_zorder() + 1)
+        ax.patch.set_visible(False)
+
+        # Merge legends from both axes
+        lines1, labels1 = ax.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax.legend(
+            lines1 + lines2, labels1 + labels2,
+            loc='upper center', bbox_to_anchor=(0.5, 1.3),
+            ncol=math.ceil((len(models_order) + 2) / nrows), frameon=False
+        )
+    else:
+        ax.legend(loc='upper center', bbox_to_anchor=(0.5, 1.3),
+                  ncol=math.ceil(len(models_order) / nrows), frameon=False)
+
     ax.grid(True, linestyle='--', alpha=0.5)
 
     if savefig and path is not None:
@@ -447,7 +703,8 @@ def plot_hourly_avg_error(
     return hourly_avg_errors
 
 
-def plot_price_scatter(prices_true, prices_pred, models, savefig=False, path=None, figsize=(16, 4), nrows=1):
+def plot_price_scatter(prices_true, prices_pred, models, savefig=False,
+                       path=None, figsize=(16, 4), nrows=1, wspace=0, **kwargs):
     min_val = min(prices_true.min(), prices_pred['FPCA-VARX'].min())
     max_val = max(prices_true.max(), prices_pred['FPCA-VARX'].max())
     ncols = len(models) // nrows
@@ -456,7 +713,7 @@ def plot_price_scatter(prices_true, prices_pred, models, savefig=False, path=Non
     for k, model in enumerate(models):
         i = k // ncols
         j = k % ncols
-        axes[i, j].scatter(prices_true, prices_pred[model], alpha=0.5, s=10, label=model)
+        axes[i, j].scatter(prices_true, prices_pred[model], label=model, **kwargs)
         axes[i, j].grid(True, linestyle='--', alpha=0.5)
         axes[i, j].plot([min_val, max_val], [min_val, max_val], color='red', linestyle='--', linewidth=1, label=None)
         axes[i, j].set_aspect('equal', adjustable='box')
@@ -465,6 +722,8 @@ def plot_price_scatter(prices_true, prices_pred, models, savefig=False, path=Non
             axes[i, j].set_ylabel('Predicted Prices [€/MWh]')
         if i == nrows - 1:
             axes[i, j].set_xlabel('True Prices [€/MWh]')
+
+    fig.subplots_adjust(wspace=wspace)
 
     if savefig and path is not None:
         plt.savefig(path, dpi=300, bbox_inches="tight")
@@ -663,12 +922,16 @@ def plot_day_level_dm_test(
         true: FDataGrid | pd.Series,
         forecasts: Union[Dict[str, FDataGrid], Dict[str, pd.DataFrame], pd.DataFrame],
         scope: str,
+        error_type="l1",
+        method=None,   # options: None, "bonferroni", "bh"
         models_order=None,
         title=None,
-        savefig=False,
-        path=None,
+        show_colorbar=True,
+        show_ytickslabels=True,
         fontsize=11,
-        pad_title=15
+        pad_title=15,
+        savefig=False,
+        path=None
     ):
     """Plotting the results of comparing forecasts using the DM test. 
     
@@ -687,6 +950,12 @@ def plot_day_level_dm_test(
             in ``true``.
         scope (str):
             scope of the DM test to be performed. It can be either 'functional', 'quantiles' or 'scalar'.
+        error_type (str, optional):
+            Type of error to be used in the DM test. Work only for scope 'scalar' and 'functional'. Defaults to "l1".
+        method (str, optional):
+            Multiple testing correction for DM p-values. Options are:
+            "none" (no correction), "bonferroni" (FWER control), and
+            "bh" (Benjamini–Hochberg FDR control applied to all off-diagonal tests).
         models_order (list, optional):
             List that indicates the order in which the models should be displayed in the plot. Defaults to None.
         title (str, optional):
@@ -708,14 +977,29 @@ def plot_day_level_dm_test(
                 p_values.loc[model1, model2] = 1
             else:
                 if scope == 'functional':
-                    p_values.loc[model1, model2] = DM_test_functional(true, forecasts[model1], forecasts[model2],
+                    p_values.loc[model1, model2] = DM_test_functional(true, forecasts[model1], forecasts[model2], error_type=error_type,
                                                                       per_hour=False, return_errors=False, two_sided=False)
                 elif scope == 'quantiles':
                     p_values.loc[model1, model2] = DM_test_quantiles(true, forecasts[model1], forecasts[model2],
                                                                   per_hour=False, return_errors=False, two_sided=False)
                 else:
-                    p_values.loc[model1, model2] = DM_test_scalar(true, forecasts[model1], forecasts[model2],
+                    p_values.loc[model1, model2] = DM_test_scalar(true, forecasts[model1], forecasts[model2], error_type=error_type,
                                                                   per_hour=False, return_errors=False, two_sided=False)
+                        
+    if method == "bonferroni":
+        p_values = (p_values * p_values.size).clip(upper=1)
+
+    elif method == "bh":
+        p_mat = p_values.astype(float)
+        mask = ~np.eye(len(p_mat), dtype=bool)
+
+        p_flat = p_mat.to_numpy()[mask]
+        _, p_adj, _, _ = multipletests(p_flat, method='fdr_bh')
+
+        p_mat = p_mat.copy()
+        p_mat.values[mask] = p_adj
+
+        p_values = p_mat
 
     # Defining color map
     red = np.concatenate([np.linspace(0, 1, 50), np.linspace(1, 0.5, 50)[1:], [0]])
@@ -727,13 +1011,19 @@ def plot_day_level_dm_test(
 
     # Generating figure
     img = plt.imshow(p_values.astype(float).values, cmap=rgb_color_map, vmin=0, vmax=0.1)
-    # plt.ylabel("Model B")
-    # plt.xlabel("Model A")
-    plt.xticks(range(len(models)), models, rotation=90., fontsize=fontsize)
-    plt.yticks(range(len(models)), models, fontsize=fontsize)
     plt.plot(range(p_values.shape[0]), range(p_values.shape[0]), 'wx')
-    colorbar = plt.colorbar(img)
-    colorbar.ax.tick_params(labelsize=fontsize)
+
+    plt.xticks(range(len(models)), models, rotation=90., fontsize=fontsize)
+
+    if show_ytickslabels:
+        plt.yticks(range(len(models)), models, fontsize=fontsize)
+    else:
+        plt.yticks(range(len(models)), [""] * len(models))
+
+    if show_colorbar:
+        colorbar = plt.colorbar(img)
+        colorbar.ax.tick_params(labelsize=fontsize)
+
     plt.title(title, fontsize=fontsize+2, pad=pad_title)
     plt.tight_layout()
     plt.grid(False)
@@ -752,21 +1042,23 @@ def plot_hour_level_dm_test(
         forecasts: Dict[str, FDataGrid] | pd.DataFrame,
         scope: str,
         alpha=0.05,
+        method=None,
         models_order=None,
         colormap='coolwarm',
         title=None,
-        savefig=False,
-        path=None,
+        show_colorbar=True,
+        show_ytickslabels=True,
         fontsize=11,
-        pad_title=15
+        pad_title=15,
+        savefig=False,
+        path=None
     ):
-    """Plotting the results of comparing forecasts using the functional DM test. 
-    
-    The resulting plot is a heat map in a chessboard shape. It represents the p-value
-    of the null hypothesis of the forecast in the y-axis being significantly more
-    accurate than the forecast in the x-axis. In other words, p-values close to 0
-    represent cases where the forecast in the x-axis is significantly more accurate
-    than the forecast in the y-axis.
+    """Plotting the results of comparing forecasts using the DM test at the hour level.
+
+    The resulting plot is a heatmap in a chessboard shape. Each cell (i, j) contains
+    the number of hours for which the forecast on the x-axis (j) is significantly more
+    accurate than the forecast on the y-axis (i), at significance level ``alpha``.
+    Higher values indicate stronger outperformance of model j over model i.
     
     Args:
         true (FDataGrid | pandas.Series):
@@ -779,55 +1071,96 @@ def plot_hour_level_dm_test(
             scope of the DM test to be performed. It can be either 'functional', 'quantiles' or 'scalar'.
         alpha (float, optional):
             Significance level to consider a forecast significantly more accurate than another. Defaults to 0.05.
+        method (str, optional):
+            Multiple testing correction applied globally across all
+            n_models * (n_models - 1) * n_hours p-values. Options are:
+            "bonferroni" (FWER control) and "bh" (Benjamini-Hochberg FDR control).
+            Defaults to None (no correction).
         models_order (list, optional):
             List that indicates the order in which the models should be displayed in the plot. Defaults to None.
         colormap (str, optional):
             Colormap to use for the heatmap. Defaults to 'coolwarm'.
         title (str, optional):
-            Title of the generated plot. Defaults to "Number of hours model A significantly \noutperforms model B".
+            Title of the generated plot. Defaults to None.
+        fontsize (int, optional):
+            Font size for axis tick labels. Colorbar tick labels use the same size.
+            Defaults to 11.
+        pad_title (int, optional):
+            Padding between the title and the plot. Defaults to 15.
         savefig (bool, optional):
             Boolean that selects whether the figure should be saved in the current folder
         path (str, optional):
             Path to save the figure. Only necessary when `savefig=True`
+
+    Returns:
+        pd.DataFrame:
+            A DataFrame of shape (n_models, n_models) containing, for each pair
+            (i, j), the number of hours for which model j is significantly more
+            accurate than model i at level ``alpha`` (after correction if applicable).
+
+    Raises:
+        ValueError:
+            If ``method`` is not one of None, 'bonferroni', or 'bh'.
     """
     models = _type_checks_and_get_models(true, forecasts, scope, models_order)
     
     n_signif_hours = pd.DataFrame(index=models, columns=models) 
 
+    # --- Step 1: collect all per-hour p-values (off-diagonal only) ---
+    all_p_values = {}
     for model1 in models:
         for model2 in models:
-            # For the diagonal elemnts representing comparing the same model we directly set a 
-            # p-value of 1
             if model1 == model2:
-                n_signif_hours.loc[model1, model2] = 0
+                continue  # handled separately in Step 3
+            if scope == 'functional':
+                p_values = DM_test_functional(true, forecasts[model1], forecasts[model2], per_hour=True)
+            elif scope == 'quantiles':
+                p_values = DM_test_quantiles(true, forecasts[model1], forecasts[model2], per_hour=True)
             else:
-                if scope == 'functional':
-                    p_values = DM_test_functional(true, forecasts[model1], forecasts[model2], per_hour=True)
-                elif scope == 'quantiles':
-                    p_values = DM_test_quantiles(true, forecasts[model1], forecasts[model2], per_hour=True)
-                else:
-                    p_values = DM_test_scalar(true, forecasts[model1], forecasts[model2], per_hour=True)
-                    
-                n_signif_hours.loc[model1, model2] = np.sum(p_values < alpha)
+                p_values = DM_test_scalar(true, forecasts[model1], forecasts[model2], per_hour=True)
+            all_p_values[(model1, model2)] = np.asarray(p_values)
 
-    # Define the colormap
-    cmap = plt.get_cmap(colormap)  # Get the full coolwarm colormap
+    # --- Step 2: apply global correction if requested ---
+    if method is not None:
+        sizes = [len(v) for v in all_p_values.values()]
+        flat_p = np.concatenate(list(all_p_values.values()))
 
-    # # Extract only the upper half (from gray to red)
-    # colors = full_cmap(np.linspace(0.5, 1, 256))  # Use the top half of the colormap
+        if method == "bonferroni":
+            flat_p_adj = np.clip(flat_p * len(flat_p), 0, 1)
+        elif method == "bh":
+            _, flat_p_adj, _, _ = multipletests(flat_p, method='fdr_bh')
+        else:
+            raise ValueError(f"Unknown correction method '{method}'. Choose from: None, 'bonferroni', 'bh'.")
 
-    # # Create a new colormap
-    # half_coolwarm = mpl.colors.ListedColormap(colors)
+        splits = np.cumsum(sizes[:-1])
+        for key, p_adj in zip(all_p_values.keys(), np.split(flat_p_adj, splits)):
+            all_p_values[key] = p_adj
 
-    # Generating figure
+    # --- Step 3: count significant hours per pair ---
+    for model1 in models:
+        for model2 in models:
+            if model1 == model2:
+                n_signif_hours.loc[model1, model2] = 0  # diagonal always 0
+            else:
+                n_signif_hours.loc[model1, model2] = np.sum(all_p_values[(model1, model2)] < alpha)
+
+
+    # --- Plotting ---
+    cmap = plt.get_cmap(colormap)
     img = plt.imshow(n_signif_hours.astype(float).values, cmap=cmap, vmin=0, vmax=24)
-    plt.xticks(range(len(models)), models, rotation=90., fontsize=fontsize)
-    # plt.ylabel("Model B", fontsize=fontsize)
-    # plt.xlabel("Model A", fontsize=fontsize)
-    plt.yticks(range(len(models)), models, fontsize=fontsize)
     plt.plot(range(n_signif_hours.shape[0]), range(n_signif_hours.shape[0]), 'wx')
-    colorbar = plt.colorbar(img)
-    colorbar.ax.tick_params(labelsize=fontsize)
+    
+    plt.xticks(range(len(models)), models, rotation=90., fontsize=fontsize)
+
+    if show_ytickslabels:
+        plt.yticks(range(len(models)), models, fontsize=fontsize)
+    else:
+        plt.yticks(range(len(models)), [""] * len(models))
+
+    if show_colorbar:
+        colorbar = plt.colorbar(img)
+        colorbar.ax.tick_params(labelsize=fontsize)
+
     plt.title(title, fontsize=fontsize+2, pad=pad_title)
     plt.tight_layout()
     plt.grid(False)

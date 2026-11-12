@@ -6,20 +6,20 @@ import numpy as np
 import pandas as pd
 import holidays
 from scipy.interpolate import interp1d
-from src.utils import get_timestamp_from_gme_system, fix_daylight_saving_time
+from .utils import get_timestamp_from_gme_system, fix_daylight_saving_time
 
 pd.options.mode.chained_assignment = None  # default='warn'
 
 GME_DATASET_NAME = 'DomandaOfferta'
 
 weekday_mapping = {
-    0: "monday",
-    1: "tuesday",
-    2: "wednesday",
-    3: "thursday",
-    4: "friday",
-    5: "saturday",
-    6: "sunday"
+    0: "Monday",
+    1: "Tuesday",
+    2: "Wednesday",
+    3: "Thursday",
+    4: "Friday",
+    5: "Saturday",
+    6: "Sunday"
 }
 
 class GMECurvesConstructor:
@@ -29,16 +29,15 @@ class GMECurvesConstructor:
         market (str, optional): The market type. Defaults to 'MGP'.
         qty_unit (str, optional): Quantity unit for curves. Defaults to 'GW'.
     """
-    def __init__(self, market='MGP', qty_unit='GW', pool=None, price_domain=(0, 300), n_prices=301,
+    def __init__(self, qty_unit='GW', pool=None, price_domain=(-500, 4000), n_prices=4501,
                  float_precision='float32'):
-        self.market = market
         self.qty_unit = qty_unit
         self.pool = pool
         self.price_domain = price_domain
         self.n_prices = n_prices
         self.float_precision = float_precision
 
-    def _get_curve_steps(self, bids, date, hour, side):
+    def _get_curve_steps(self, bids: pd.DataFrame, date: int, hour: int, side: str):
         """
         Extracts and processes bid data for a specific date, hour, and type, returning cumulative quantities and prices.
         This method filters the input DataFrame for the specified date and hour, sorts the data based on price and type,
@@ -60,13 +59,16 @@ class GMECurvesConstructor:
         if date >= 20250101:
             df = df.loc[df.TIPO_OFFERTA != 'B'] # Remove block orders
 
-        df.loc[:, '_sorting'] = df.Prezzo
-        df.loc[df.Tipo == 'BID', '_sorting'] = -df._sorting
-        df.sort_values(by=['Tipo', '_sorting'], inplace=True)
+        if side == 'BID':
+            df.loc[:, '_sorting'] = -df.Prezzo
+        else:
+            df.loc[:, '_sorting'] = df.Prezzo
 
-        df['cumQuantita'] = df.groupby('Tipo')['Quantita'].cumsum()
+        df.sort_values(by='_sorting', inplace=True)
+
+        df['cumQuantita'] = df['Quantita'].cumsum()
         
-        return df.loc[df.Tipo == side, ['cumQuantita', 'Prezzo']]
+        return df.loc[:, ['cumQuantita', 'Prezzo']]
     
 
     def _add_import_export(self, steps, balance_df, date, hour):
@@ -155,7 +157,7 @@ class GMECurvesConstructor:
         return f(xnew)
     
 
-    def get_curves_dataset(self, input_df, side, balance_df, progress_bar=True):
+    def get_curves_dataset(self, input_df: pd.DataFrame, side: str, balance_df: pd.DataFrame, price_grid: np.ndarray | None = None, progress_bar=True):
         """
         Generates a dataset of curve values over a specified domain for each unique (Data, Ora) pair in the input DataFrame.
 
@@ -178,14 +180,23 @@ class GMECurvesConstructor:
             - If `type` is 'OFF', import/export adjustments are applied to the curve steps.
         """
         if self.pool:
-            df = input_df[input_df.ZonaMercato == self.pool]
+            df = input_df.loc[input_df.Tipo == side & input_df.ZonaMercato == self.pool, :]
         else:
-            df = input_df.copy()
+            df = input_df.loc[input_df.Tipo == side, :]
 
         gme_hour_intervals = df[['Data', 'Ora']].drop_duplicates()
         timestamps = get_timestamp_from_gme_system(gme_hour_intervals)
         n = len(gme_hour_intervals)
-        grid_points = np.linspace(self.price_domain[0], self.price_domain[1], self.n_prices)
+
+
+        if price_grid is not None:
+            # Checking whether the provided price grid is coherent with the constructor object attributes
+            assert tuple(price_grid[[0, -1]]) == self.price_domain and len(price_grid) == self.n_prices
+            grid_points = price_grid.copy()
+        else:
+            # otherwise we build a classic uniform grid
+            grid_points = np.linspace(self.price_domain[0], self.price_domain[1], self.n_prices)
+
         data_matrix = np.zeros((n, self.n_prices))
         idx = 0
 
@@ -217,6 +228,123 @@ class GMECurvesConstructor:
     
 
 
+class EPEXCurvesConstructor:
+    """
+    Class to handle EPEX curves preprocessing.
+    Args:
+        market (str, optional): The market type. Defaults to 'MGP'.
+        qty_unit (str, optional): Quantity unit for curves. Defaults to 'GW'.
+    """
+    def __init__(self, price_domain=(-500, 1000), n_prices=1501, qty_unit='GW', float_precision='float32'):
+        self.price_domain = price_domain
+        self.n_prices = n_prices
+        self.qty_unit = qty_unit
+        self.float_precision = float_precision
+    
+    def _get_qty_function(self, steps, xnew, side):
+        """
+        Interpolates cumulative quantity values at specified price points using stepwise interpolation.
+        This function sorts the input DataFrame by the 'Prezzo' column, normalizes the 'cumQuantita' column
+        based on the unit (GW or not), and creates a stepwise interpolation function. The interpolation
+        direction (next or previous) is determined by the 'type' argument.
+        Args:
+            steps (pd.DataFrame): DataFrame containing at least 'Prezzo' and 'cumQuantita' columns.
+            xnew (array-like): New price points at which to interpolate the cumulative quantity.
+            type (str): Type of step interpolation. If 'BID', uses 'next' step; otherwise, uses 'previous'.
+        Returns:
+            np.ndarray: Interpolated cumulative quantity values at the specified price points.
+        Raises:
+            KeyError: If 'Prezzo' or 'cumQuantita' columns are missing in the input DataFrame.
+            ValueError: If 'type' is not recognized.
+        """
+        x = steps['price']
+        if self.qty_unit == 'GW':
+            y = steps['quantity'] / 1000
+        else:
+            y = steps['quantity']
+            
+        if side == 'BID':
+            kind = 'next'
+        else:
+            kind = 'previous'
+            
+        fill_value = (y.iloc[0], y.iloc[-1])
+        f = interp1d(
+            x, y,
+            kind=kind,
+            fill_value=fill_value,
+            bounds_error=False,
+            assume_sorted=True
+        )
+        return f(xnew)
+    
+
+    def get_curves_dataset(self, input_df: pd.DataFrame, side: str, balance_df: None = None, price_grid: np.ndarray | None = None, progress_bar=True):
+        """
+        Generates a dataset of curve values over a specified domain for each unique (Data, Ora) pair in the input DataFrame.
+
+        Args:
+            input_df (pd.DataFrame): Input DataFrame containing at least 'Data', 'Ora', and 'ZonaMercato' columns.
+            type (str): Type of curve to process (e.g., 'OFF', etc.).
+            balance_df (pd.DataFrame): Not used, only for compatibility
+            progress_bar (bool, optional): Whether to display a progress bar during processing. Defaults to True.
+
+        Returns:
+            Tuple[pd.DataFrame, np.ndarray]: 
+                - DataFrame where each row corresponds to a (Data, Ora) timestamp and each column to a grid point in the domain, containing the evaluated curve values.
+                - Numpy array of grid points used for curve evaluation.
+
+        Raises:
+            Any exceptions raised by called methods such as `get_curve_steps`, `add_import_export`, `get_qty_function`, or `fix_daylight_saving_time`.
+
+        Notes:
+            - Handles daylight saving time adjustments on the resulting DataFrame.
+            - If `type` is 'OFF', import/export adjustments are applied to the curve steps.
+        """
+        df = input_df.copy()
+        df = df[df.side == side]
+        df.drop(['side'], axis=1, inplace=True)
+
+        if side == 'BID':
+            df.drop_duplicates(subset=['timestamp', 'price'], keep='first', inplace=True)
+        else:
+            df.drop_duplicates(subset=['timestamp', 'price'], keep='last', inplace=True)
+
+        df = df.set_index("timestamp")
+
+        timestamps = df.index.unique()
+        n = len(timestamps)
+
+        if price_grid is not None:
+            # Checking whether the provided price grid is coherent with the constructor object attributes
+            assert tuple(price_grid[[0, -1]]) == self.price_domain and len(price_grid) == self.n_prices
+            grid_points = price_grid.copy()
+        else:
+            # otherwise we build a classic uniform grid
+            grid_points = np.linspace(self.price_domain[0], self.price_domain[1], self.n_prices)
+
+        data_matrix = np.zeros((n, self.n_prices))
+        idx = 0
+
+        for ts in tqdm(
+            timestamps,
+            disable=not progress_bar
+        ):
+            data_matrix[idx, :] = self._get_qty_function(df.loc[ts], grid_points, side)
+            idx += 1
+
+        # Necessary to transform into DataFrame to use fix_daylight_saving_time
+        data_matrix = pd.DataFrame(data_matrix, index=timestamps)
+        data_matrix = fix_daylight_saving_time(data_matrix)
+
+        # Compression
+        self.timestamps = data_matrix.index # Store timestamps as an attribute
+        data_matrix = data_matrix.to_numpy().astype(self.float_precision)
+        grid_points = grid_points.astype(self.float_precision)
+
+        return data_matrix, grid_points
+
+
 class ExogPreprocessor:
     """
     Data preprocessing class.
@@ -224,15 +352,17 @@ class ExogPreprocessor:
     Args:
         start_date (datetime.date): Start date of the preprocessing period
         end_date (datetime.date): End date of the preprocessing period
-        exog_variables (list[str]): List of exogenous variables to include (see aliases in params.py)
     """
-    def __init__(self, start_date: datetime.date, end_date: datetime.date, exog_variables: list[str], timezone: str = 'Europe/Rome'):
+    def __init__(self, start_date: datetime.date, end_date: datetime.date, exog_variables: list[str], market: str, timezone: str = 'Europe/Rome'):
         self.timezone = timezone
         self.start_date = start_date
         self.start_datetime = pd.Timestamp(year=start_date.year, month=start_date.month, day=start_date.day, hour=0, tz=timezone)
         self.end_date = end_date
         self.end_datetime = pd.Timestamp(year=end_date.year, month=end_date.month, day=end_date.day, hour=23, tz=timezone)
         self.exog_variables = exog_variables
+        if market not in ['GME', 'EPEX-DE-LU', 'EPEX-FR']:
+            raise ValueError("market should be 'GME', 'EPEX-DE-LU' or 'EPEX-FR'")
+        self.market = market
 
 
     @staticmethod
@@ -292,16 +422,22 @@ class ExogPreprocessor:
         df['weekday'] = df.index.weekday.map(weekday_mapping)
 
         # Add day type in which we make the distinction between Mondays, Working days (From Tuesday to Friday), Saturdays and Holidays (including Sundays)
-        holidays_it = holidays.IT(years=df.index.year.unique()) # Retrieve holidays in Italy
-        df['daytype'] = 'working-day'
-        df.loc[df.weekday == 'saturday', 'daytype'] = 'saturday'
-        df.loc[df.weekday == 'sunday', 'daytype'] = 'holiday' # Flag Sundays as holidays
-        df.loc[df.weekday == 'monday', 'daytype'] = 'monday'
-        df.loc[pd.Series(df.index.date, index=df.index).apply(lambda day: day in holidays_it), 'daytype'] = 'holiday'
+        if self.market == 'GME':
+            holidays_list = holidays.IT(years=df.index.year.unique()) # Retrieve holidays in Italy
+        if self.market == 'EPEX-DE-LU':
+            holidays_list = holidays.DE(years=df.index.year.unique()) # Retrieve holidays in Germany
+        if self.market == 'EPEX-FR':
+            holidays_list = holidays.FR(years=df.index.year.unique()) # Retrieve holidays in France
+
+        df['daytype'] = 'Working-day'
+        df.loc[df.weekday == 'Saturday', 'daytype'] = 'Saturday'
+        df.loc[df.weekday == 'Sunday', 'daytype'] = 'Holiday' # Flag Sundays as holidays
+        df.loc[df.weekday == 'Monday', 'daytype'] = 'Monday'
+        df.loc[pd.Series(df.index.date, index=df.index).apply(lambda day: day in holidays_list), 'daytype'] = 'Holiday'
 
         # Get dummy variables
         df = pd.get_dummies(df, columns=['daytype'], prefix='is')
-        df.drop(['weekday', 'is_working-day'], axis=1, inplace=True)
+        df.drop(['weekday', 'is_Working-day'], axis=1, inplace=True)
 
         # We store the dummy columns in a separate attribute for later use
         self.dummy_columns = [col for col in df.columns if col.startswith('is_')]
@@ -331,12 +467,6 @@ class ExogPreprocessor:
         else:
             df = exog_df.copy()
         df = df.loc[self.start_datetime:self.end_datetime, self.exog_variables]
-        
-        # Group the solar and wind variables (not per zone /!\)
-        solar_columns = [col for col in self.exog_variables if 'Solar' in col]
-        wind_columns = [col for col in self.exog_variables if 'Wind' in col]
-        df['RES'] = df[solar_columns].sum(axis=1) + df[wind_columns].sum(axis=1)
-        df.drop(solar_columns + wind_columns, axis=1, inplace=True)
 
         df = self.fill_hourly_nans_from_past_weeks(df)
         df = self._add_calendar_dummies(df)

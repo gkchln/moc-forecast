@@ -14,8 +14,23 @@ from src.models import LassoVARX
 
 LAGS_ENDOG = [1, 2, 3, 7]
 LAGS_EXOG = [0, 1, 7]
+EXOG_USE = {
+    'Load': {"lags": "{lags_exog}", "structure": "{exog_structure}"},
+    'RES': {"lags": "{lags_exog}", "structure": "{exog_structure}"},
+    'NTC FR > IT': {"lags": "{lags_exog}", "structure": "{exog_structure}"},
+    'NTC CH > IT': {"lags": "{lags_exog}", "structure": "{exog_structure}"},
+}
 CRITERION = 'aic'
 RANDOM_STATE = 42
+
+def _format_exog_use(lags_exog, exog_structure):
+    exog_use = {}
+    for key, value in EXOG_USE.items():
+        exog_use[key] = value
+        exog_use[key]['structure'] = value['structure'].format(exog_structure = exog_structure)
+        exog_use[key]['lags'] = value['lags'].format(lags_exog = lags_exog)
+    return exog_use
+
 
 def main(
         endog_path,
@@ -85,10 +100,9 @@ def main(
     ### Forecasting ###  
     model = LassoVARX(
         lags_endog=LAGS_ENDOG,
-        lags_exog=LAGS_EXOG,
         autocorr_structure=autocorr_structure,
         crosscorr_structure=crosscorr_structure,
-        exog_structure=exog_structure,
+        exog_use=_format_exog_use(LAGS_EXOG, exog_structure),
         calibration_window=calibration_window,
         criterion=CRITERION,
         random_state=RANDOM_STATE,
@@ -99,9 +113,6 @@ def main(
 
     prices_pred = forecaster.fit_forecast_rolling(prices, exog, test_start_date, show_progress=show_progress)
 
-    # /!\ postprocessing specific to GME /!\
-    prices_pred.clip(lower=0, inplace=True)
-
     ### Save ###
     logging.info("MAE: {:.2f}€/MWh".format((prices - prices_pred).squeeze().abs().mean()))
     price_folder = join(save_folder, 'prices')
@@ -109,8 +120,9 @@ def main(
     os.makedirs(price_folder, exist_ok=True)
     os.makedirs(forecasters_folder, exist_ok=True)
     prices_pred.to_csv(join(price_folder, f'{run_name}.csv'), index=True)
+    logging.info(f"Saved price forecasts to {join(price_folder, f'{run_name}.csv')}")
     forecaster.to_pickle(join(forecasters_folder, f'{run_name}.pkl'))
-
+    logging.info(f"Saved forecaster to {join(forecasters_folder, f'{run_name}.pkl')}")
     logging.info(f"Done.")
 
 

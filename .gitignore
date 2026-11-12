@@ -5,6 +5,12 @@ notebooks/
 results/
 documents/
 
+# Text file to save pbs jobs
+scripts/curve_based/*jobs*.sh
+
+# HPC execution file
+*.pbs
+
 # Misc.
 .DS_Store
 
