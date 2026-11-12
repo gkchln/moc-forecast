@@ -42,7 +42,7 @@ read -ra K_DEMAND <<< "$K_DEMAND_ARG"
 # ---------------------------
 # Activate Python environment
 # ---------------------------
-source ../.venvs/moc_forecast/bin/activate
+source .venv/bin/activate
 
 # ---------------------------
 # Define static parameters
