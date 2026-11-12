@@ -10,14 +10,14 @@ test_start = '2024-01-01 00:00:00'
 test_end = '2024-12-31 23:00:00'
 
 mgp_prices_path = 'data/source/GME/MGP_prices.csv'
-entsoe_path = 'data/source/ENTSOE.csv'
+entsoe_path = 'data/source/ENTSOE/ENTSOE.csv'
 lseg_path = 'data/source/LSEG/RES-forecast.csv'
 invest_paths = {
-    'Gas': 'data/source/ICE Dutch TTF Natural Gas Futures Historical Data.csv',
-    'Coal': 'data/source/Coal (API2) CIF ARA (ARGUS-McCloskey) Futures Historical Data.csv',
-    'Oil': 'data/source/Brent Oil Futures Historical Data.csv',
-    'CO2': 'data/source/European Union Carbon Permits Allowance (EUA) Yearly Futures Historical Data.csv',
-    'USD_EUR': 'data/source/USD_EUR Historical Data.csv'
+    'Gas': 'data/source/Investing/ICE Dutch TTF Natural Gas Futures Historical Data.csv',
+    'Coal': 'data/source/Investing/Coal (API2) CIF ARA (ARGUS-McCloskey) Futures Historical Data.csv',
+    'Oil': 'data/source/Investing/Brent Oil Futures Historical Data.csv',
+    'CO2': 'data/source/Investing/European Union Carbon Permits Allowance (EUA) Yearly Futures Historical Data.csv',
+    'USD_EUR': 'data/source/Investing/USD_EUR Historical Data.csv'
 }
 curves_path = 'data/processed/{market}/sdts.pkl'
 outpath = 'data/processed/{market}/predictors.csv'
