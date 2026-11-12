@@ -2,11 +2,24 @@
 
 This repository contains the code associated with the following paper:
 
-> Koechlin, G., Bovera, F., & Secchi, P. (2025). **Day-Ahead Electricity Price Forecasting Using Merit-Order Curves Time Series.**. _arXiv preprint_. [`doi.org/10.48550/arXiv.2512.17758`](https://doi.org/10.48550/arXiv.2512.17758)
+> Koechlin, G., Bovera, F., & Secchi, P. (2025). **Day-Ahead Electricity Price Forecasting Using Merit-Order Curves Time Series**. _arXiv preprint_. [`doi.org/10.48550/arXiv.2512.17758`](https://doi.org/10.48550/arXiv.2512.17758)
 
 which introduces a general, simple, and computationally efficient functional data analysis framework for forecasting day-ahead supply and demand merit-order (or aggregated) curves, and the resulting electricity price.
 
-Instructions to replicate the paper can be found in the Paper replication section.
+Instructions to reproduce the paper can be found in the [Paper replication](#paper-replication) section.
+
+Additionnally, a description of the _probabilistic_ forecasting component can be found in the second chapter of the following PhD thesis:
+
+> Koechlin, G. (2026). **Data-driven models for electricity spot markets: monitoring, forecasting and strategic bidding**. _Doctoral dissertation, Politecnico di Milano_. [`hdl.handle.net/10589/262719`](https://hdl.handle.net/10589/262719)
+
+## Table of Contents
+- [Installation](#installation)
+- [Project structure](#project-structure)
+- [Basic usage](#basic-usage)
+- [Python modules](#python-modules)
+- [Paper replication](#paper-replication)
+- [License](#license)
+- [Authors](#authors)
 
 ## Installation
 
@@ -31,17 +44,11 @@ On Windows PowerShell, activate the environment with:
 .\.venv\Scripts\Activate.ps1
 ```
 
-Check that the interpreter can import the project's main dependencies:
-
-```bash
-python -c "import numpy, pandas, skfda, sklearn; print('Environment ready')"
-```
-
-Keep the environment active and run commands from the repository root. The
+Keep the environment active and **run commands from the repository root**. The
 scripts import the project modules using the `src` package, and their default
 input/output paths are relative to the current working directory.
 
-For the optional Julia stage, install the required packages in the Julia
+For the optional Julia stage (**not** necessary for paper replication), install the required packages in the Julia
 environment you intend to use. For example, to add them to Julia's default
 environment:
 
@@ -214,11 +221,11 @@ the default paths.
 
 ### 1. Get the data
 
-The dataset is hosted on Zenodo.
+The source data for the study is hosted on Zenodo.
 
 Download: https://zenodo.org/records/YOUR_RECORD_ID
 
-Extract the downloaded archive into the `data/source/` directory.
+Copy the content of the Zenodo repository in the `data/source/` directory (which you must create).
 
 ### 2. Build supply and demand curves from bids datasets
 
@@ -240,15 +247,15 @@ python -m scripts.curve_based.build_curves data/source/GME/MGP_bids.parquet data
 python -m scripts.curve_based.build_curves data/source/GME/MGP_bids.parquet data/processed/GME/sdts_full.pkl --coupling_path data/source/GME/MGP_coupling.csv --market GME --optimize_grid
 ```
 
-The restricted curves dataset (main analysis) is saved under `data/processed/${MARKET}/sdts.pkl` while the full dataset with optimized price grid (secondary analysis) is saved under `data/processed/${MARKET}/sdts_full_opt.pkl`.
+The restricted curves dataset (main analysis) is saved under `data/processed/${MARKET}/sdts.pkl` while the full dataset with optimized price grid (secondary analysis, which results are presented in the appendix) is saved under `data/processed/${MARKET}/sdts_full_opt.pkl`.
 
 ### 3. Data preprocessing
 
 Data preprocessing beyond curves construction is done by [`scripts/preprocess_data.py`](scripts/preprocess_data.py) which, differently from the previous script, is not a configurable CLI. It takes as inputs:
 
-- ENTSOE source data (Load and NTC forecast) located at `data/source/ENTSOE.csv`
+- ENTSOE source data (Load and NTC forecast) located at `data/source/ENTSOE/ENTSOE.csv`
 - LSEG source data (Solar and wind generation forecast) `data/source/LSEG/RES-forecast.csv`
-- Daily fuel and currency price CSV files (not used further in the workflow but required in the data processing step) under `data/source/`
+- Daily fuel and currency price CSV files (not used further in the workflow but required in the data processing step) in `data/source/Investing/`
 - Previously constructed curve pickles at
   `data/processed/${MARKET}/sdts.pkl`
 
@@ -426,7 +433,3 @@ python -m scripts.make_paper --output_folder data/output/${MARKET}/ --true_curve
 ## Authors
 
 [Specify authors if available]
-
-## Contributing
-
-[Guidelines for contributing]
