@@ -361,6 +361,7 @@ def main(
             print(f"Computing {side.upper()} curves approximation metrics with respect to number"
                 f" of {trans_type.upper()} components on initial training set...")
             metrics[side][trans_type] = compute_approx_metrics(curves_train, side, trans_type)
+            print(f"Done.")
 
     for kind in ['curve_ev', 'curve_mae', 'mcp_mae']:
         outfile = join(plots_folder, f'approx_{kind}_{market.lower()}.png')
