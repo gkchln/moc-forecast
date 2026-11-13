@@ -15,20 +15,19 @@ from src.models import LassoVARX
 LAGS_ENDOG = [1, 2, 3, 7]
 LAGS_EXOG = [0, 1, 7]
 EXOG_USE = {
-    'Load': {"lags": "{lags_exog}", "structure": "{exog_structure}"},
-    'RES': {"lags": "{lags_exog}", "structure": "{exog_structure}"},
-    'NTC FR > IT': {"lags": "{lags_exog}", "structure": "{exog_structure}"},
-    'NTC CH > IT': {"lags": "{lags_exog}", "structure": "{exog_structure}"},
+    'Load': {"lags": LAGS_EXOG, "structure": "{exog_structure}"},
+    'RES': {"lags": LAGS_EXOG, "structure": "{exog_structure}"},
+    'NTC FR > IT': {"lags": LAGS_EXOG, "structure": "{exog_structure}"},
+    'NTC CH > IT': {"lags": LAGS_EXOG, "structure": "{exog_structure}"},
 }
 CRITERION = 'aic'
 RANDOM_STATE = 42
 
-def _format_exog_use(lags_exog, exog_structure):
+def _format_exog_use(exog_structure):
     exog_use = {}
     for key, value in EXOG_USE.items():
         exog_use[key] = value
         exog_use[key]['structure'] = value['structure'].format(exog_structure = exog_structure)
-        exog_use[key]['lags'] = value['lags'].format(lags_exog = lags_exog)
     return exog_use
 
 
@@ -102,7 +101,7 @@ def main(
         lags_endog=LAGS_ENDOG,
         autocorr_structure=autocorr_structure,
         crosscorr_structure=crosscorr_structure,
-        exog_use=_format_exog_use(LAGS_EXOG, exog_structure),
+        exog_use=_format_exog_use(exog_structure),
         calibration_window=calibration_window,
         criterion=CRITERION,
         random_state=RANDOM_STATE,
