@@ -280,7 +280,7 @@ Two options are available:
 1. The first one (_light_ version, recommended) is to run backtests for all FPCA and ZST models for one $K_s, K_d$ pair only (which can however be different between FPCA and ZST, see table below). This allows to reproduce all results except those of section 3.5 (sensitivity analysis to $K_s, K_d$).
 2. The second one (_full_ version) is to run backtests for all FPCA and ZST models for _all_ $K_s, K_d$ pairs, which allows to replicate all paper results, including those of section 3.5. This option implies highly intensive and time-consuming calculations so we strongly encourage the use of a **HPC cluster** and the batch jobs scripts in case this option is chosen. Note that the running time amounts to ~1-2 days with 6 nodes of 96 cores each.
 
-#### 4.a. Light version
+#### 4.a. Light version (5-10h on PC)
 
 The light version requires to run `scripts/curve_based/point_forecast.py` 24 times, for each market-model combination:
 
@@ -311,7 +311,7 @@ The light version requires to run `scripts/curve_based/point_forecast.py` 24 tim
 | ZST-fARX-6-8 EPEX-DE-LU | `EPEX-DE-LU` | 6 | 8 | `zst` | `full` | `none` |
 | ZST-fVARX-6-8 EPEX-DE-LU | `EPEX-DE-LU` | 6 | 8 | `zst` | `full` | `concurrent` |
 
-A run takes in average **~30min** to complete.
+A run can take between **10min** (ARX) and **2h** (fVARX) to complete, depending on the number of cores used.
 
 Export parameters values first:
 ```bash
@@ -338,15 +338,16 @@ export K_DEMAND=4
 export TRANSFORMER=fpca
 export TRANS_TYPE=dynamic
 export N_PARALLEL=4
-export N_THREADS=2
+export N_THREADS=4
 
 bash scripts/curve_based/batch_point_forecast.sh "$MARKET" "$TRANSFORMER" "$TRANS_TYPE" "$K_SUPPLY" "$K_DEMAND" "$N_PARALLEL" "$N_THREADS"
 ```
+In this case, each batch run takes **between 1 and 2 hours**.
 
 Each job has its own log file in `data/output/${MARKET}/curve_based/_logs/`
 
 The outputs of `point_forecast.py` are:
--  Out-of-sample curves forecasts as a serialized `curves.SupplyDemandTimeSeries` instance (pickle file) for 2024 at `data/output/${MARKET}/curve_based/curves/`. Check `point_forecast.py` if you want to understand the naming logic.
+-  Out-of-sample curves forecasts as a serialized `curves.SupplyDemandTimeSeries` instance (pickle file with `.pkl` extension) for 2024 at `data/output/${MARKET}/curve_based/curves/`. Check `point_forecast.py` if you want to understand the naming logic.
 - A serialized `forecasters.SupplyDemandForecaster` instance which contains metadata and various parameters associated with the curves forecasts at `data/output/${MARKET}/curve_based/forecasters/`.
 
 **(Optional)** You can additionnally run the models with the _static_ approach for curves representation, which allows you to reproduce the results presented in Appendix D of the paper. Just change the `transformer_type` argument to `static` (`dynamic` by default):
@@ -356,30 +357,32 @@ python -m scripts.curve_based.point_forecast --endog_path "data/processed/${MARK
 ```
 
 
-#### 4.b. Full version
+#### 4.b. Full version (~2d on HPC cluster)
 
 Needs to be run for each market and transformer, i.e., 6 times:
 
 ```bash
 export MARKET=GME # ['GME', 'EPEX-FR', 'EPEX-DE-LU']
 export TRANSFORMER=fpca # ['fpca', 'zst']
+export TRANS_TYPE=dynamic
 export N_PARALLEL=48 # e.g. on a node with 96 cores
 export N_THREADS=2
 
 export K_SUPPLY=5 # Match value for market and transformer in the table above
-bash scripts/curve_based/batch_point_forecast.sh "$MARKET" "$TRANSFORMER" "$K_SUPPLY" "2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20" "$N_PARALLEL" "$N_THREADS" # When K_SUPPLY is fixed
+bash scripts/curve_based/batch_point_forecast.sh "$MARKET" "$TRANSFORMER" "$TRANS_TYPE" "$K_SUPPLY" "2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20" "$N_PARALLEL" "$N_THREADS" # When K_SUPPLY is fixed
 
 export K_DEMAND=4 # Match value for market and transformer in the table above
-bash scripts/curve_based/batch_point_forecast.sh "$MARKET" "$TRANSFORMER" "2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20" "$K_DEMAND" "$N_PARALLEL" "$N_THREADS" # When K_DEMAND is fixed
+bash scripts/curve_based/batch_point_forecast.sh "$MARKET" "$TRANSFORMER" "$TRANS_TYPE" "2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20" "$K_DEMAND" "$N_PARALLEL" "$N_THREADS" # When K_DEMAND is fixed
 ```
+Which makes 12 runs of `batch_point_forecast.sh` in total.
 
-Note that this version took us **~36h** of wall time with 12 nodes (one for each call of `batch_point_forecast.sh`) of 96 cores each.
+Note that this version took us **~36h** of wall time with 12 nodes of 96 cores each.
 
-### 5. Price-based clearing price forecasts
+### 5. Price-based clearing price forecasts (<30min)
 
 The price-based ARX, fARX and LEAR models must be run similarly as curve-based forecasts with `scripts/price_based/point_forecast.py`. There are 9 runs in total to perfom, three (ARX, fARX and LEAR) for each market:
 
-1. For the **ARX** model
+1. For the **ARX** model (~1min)
 
 ```bash
 export MARKET=GME # ['GME', 'EPEX-FR', 'EPEX-DE-LU']
@@ -387,22 +390,22 @@ export MARKET=GME # ['GME', 'EPEX-FR', 'EPEX-DE-LU']
 python -m scripts.price_based.point_forecast --endog_path "data/processed/${MARKET}/price.csv" --exog_path "data/processed/${MARKET}/predictors.csv" --save_folder "data/output/${MARKET}/price_based/" --autocorr_structure concurrent --crosscorr_structure none --exog_structure concurrent --progress
 ```
 
-2. For the **fARX** model
+2. For the **fARX** model (~5min)
 
 ```bash
 python -m scripts.price_based.point_forecast --endog_path "data/processed/${MARKET}/price.csv" --exog_path "data/processed/${MARKET}/predictors.csv" --save_folder "data/output/${MARKET}/price_based/" --autocorr_structure full --crosscorr_structure none --exog_structure concurrent --progress
 ```
 
-3. For the **LEAR** model
+3. For the **LEAR** model (~20min)
 
 ```bash
-python -m scripts.price_based.point_forecast --endog_path "data/processed/${MARKET}/price.csv" --exog_path "data/processed/${MARKET}/predictors_LEAR.csv" --save_folder "data/output/${MARKET}/price_based/" --autocorr_structure concurrent --crosscorr_structure none --exog_structure full --progress
+python -m scripts.price_based.point_forecast --endog_path "data/processed/${MARKET}/price.csv" --exog_path "data/processed/${MARKET}/predictors_LEAR.csv" --save_folder "data/output/${MARKET}/price_based/" --autocorr_structure full --crosscorr_structure none --exog_structure full --progress
 ```
 
 Results are stored at `data/output/${MARKET}/price_based/`.
 
 
-### 5. Produce results analysis
+### 5. Produce results analysis (<10min)
 
 Once forecasts are generated, [`scripts/make_paper.py`](scripts/make_paper.py) automatically generates figures and tables reported in the paper. You will need:
 1. Forecast results (price-based and curve-based) for each `MARKET` at `data/output/${MARKET}/`
@@ -415,7 +418,7 @@ Results (figures and tables) will be saved in `results/`.
 If you just ran the light version of the analysis, run:
 ```bash
 export MARKET=GME # ['GME', 'EPEX-FR', 'EPEX-DE-LU']
-python -m scripts.make_paper --output_folder data/output/${MARKET}/ --true_curves_path data/processed/${MARKET}/sdts.pkl --results_folder results/ --market $MARKET --static_vs_dynamic --sensitivity_nb_components
+python -m scripts.make_paper --output_folder data/output/${MARKET}/ --true_curves_path data/processed/${MARKET}/sdts.pkl --results_folder results/ --market $MARKET
 ```
 
 #### 5.b. Full version
