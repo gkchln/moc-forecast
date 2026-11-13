@@ -63,7 +63,7 @@ def compute_approx_metrics(sd: SupplyDemandTimeSeries, side: str, trans_type: st
         transformer_full = SupplyDemandFPCA(K_supply, K_demand)
         scores_full = transformer_full.fit_transform(sd_smooth)
 
-    for K in trange(2, max_K+1):
+    for K in range(2, max_K+1):
         if side == 'supply':
             K_supply, K_demand = K, 2
         else:
