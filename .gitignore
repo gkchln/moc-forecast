@@ -1,9 +1,12 @@
-# Data files
+# Data, notebooks, plots, docs, etc.
 data/
 plots/
 notebooks/
 results/
 documents/
+
+# Except the data README.md file
+!data/README.md
 
 # Text file to save pbs jobs
 scripts/curve_based/*jobs*.sh
