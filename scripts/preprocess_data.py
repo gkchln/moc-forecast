@@ -12,13 +12,6 @@ test_end = '2024-12-31 23:00:00'
 mgp_prices_path = 'data/source/GME/MGP_prices.csv'
 entsoe_path = 'data/source/ENTSOE/ENTSOE.csv'
 lseg_path = 'data/source/LSEG/RES-forecast.csv'
-invest_paths = {
-    'Gas': 'data/source/Investing/ICE Dutch TTF Natural Gas Futures Historical Data.csv',
-    'Coal': 'data/source/Investing/Coal (API2) CIF ARA (ARGUS-McCloskey) Futures Historical Data.csv',
-    'Oil': 'data/source/Investing/Brent Oil Futures Historical Data.csv',
-    'CO2': 'data/source/Investing/European Union Carbon Permits Allowance (EUA) Yearly Futures Historical Data.csv',
-    'USD_EUR': 'data/source/Investing/USD_EUR Historical Data.csv'
-}
 curves_path = 'data/processed/{market}/sdts.pkl'
 outpath = 'data/processed/{market}/predictors.csv'
 
@@ -66,31 +59,11 @@ entsoe.index = pd.to_datetime(entsoe.index, utc=True).tz_convert("Europe/Rome")
 lseg = pd.read_csv(lseg_path, index_col=0, parse_dates=True)
 lseg.index = pd.to_datetime(lseg.index, utc=True).tz_convert("Europe/Rome")
 
-# Investing.com
-invest_df_dict = {}
-for var, path in invest_paths.items():
-    df = pd.read_csv(path, parse_dates=['Date'], index_col='Date')
-    df.index = df.index.to_period('D')
-    invest_df_dict[var] = df[['Price']]
-
-period_index = pd.period_range(start=invest_df_dict['Coal'].index.min(), end=invest_df_dict['Coal'].index.max(), freq="D")
-invest_df = pd.DataFrame(index=period_index)
-
-invest_df['Gas'] = invest_df_dict['Gas']['Price']
-for fuel in ['Coal', 'Oil']:
-    invest_df[fuel] = invest_df_dict[fuel]['Price'] * invest_df_dict['USD_EUR']['Price']
-invest_df['CO2'] = invest_df_dict['CO2']['Price']
-invest_df = invest_df.reindex(period_index).ffill()
-invest_df = invest_df[pd.Period(preprocess_start, freq='D'):pd.Period(test_end, freq='D')]
-invest_df.index = invest_df.index.to_timestamp().date
-
 
 # Combine and create two separate dataframes for each market
 exog = entsoe.drop(["Price DE_LU", "Price FR"], axis=1)
 for col in lseg.columns:
     exog[col] = lseg[col]
-for col in invest_df.columns:
-    exog[col] = [invest_df[col].get(ts.date()) for ts in exog.index]
 
 exog.rename({
     'Forecasted Load DE_LU': 'Load DE_LU',
