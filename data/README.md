@@ -1,27 +1,17 @@
 # Data repository for *Day-Ahead Electricity Price Forecasting Using Merit-Order Curves Time Series*
 
-This repository contains the data associated with the following paper:
+The data is hosted on Zenodo and must be downloaded, in this directory, at the following link: https://zenodo.org/records/24111524
 
-> Koechlin, G., Bovera, F., & Secchi, P. (2025). **Day-Ahead Electricity Price Forecasting Using Merit-Order Curves Time Series.** [https://doi.org/10.48550/arXiv.2512.17758](https://doi.org/10.48550/arXiv.2512.17758)
+To cite the dataset:
 
----
+> Koechlin, G., Secchi, P., & Bovera, F. (2026). Data for "Day-Ahead Electricity Price Forecasting Using Merit-Order Curves Time Series" (Version v1.0) [Data set]. _Zenodo_. https://doi.org/10.5281/zenodo.24111524
 
-## Table of contents
 
-- [Repository structure](#repository-structure)
-- [`source/`: raw data](#source-raw-data)
-- [`processed/`: preprocessed data](#processed-preprocessed-data)
-- [`output/`: forecasts](#output-forecasts)
-  - [Curve-based forecasts](#curve-based-forecasts)
-  - [Price-based forecasts](#price-based-forecasts)
-
----
-
-## Repository structure
+## 📁 Repository structure
 
 ```text
 .
-├── source/                 # Raw data (ENTSO-E, EPEX, GME, Investing.com, LSEG)
+├── source/                 # Raw data
 │   ├── ENTSOE/
 │   ├── EPEX/
 │   ├── GME/
@@ -33,7 +23,7 @@ This repository contains the data associated with the following paper:
 └── output/                 # Rolling curve-based and price-based forecasts, by market
     ├── EPEX-DE-LU/
     │   ├── curve_based/
-    │   │   ├── curves/       # Forecasted curves (SupplyDemandTimeSeries, .pkl)
+    │   │   ├── curves/       # Curves forecasts (SupplyDemandTimeSeries, .pkl)
     │   │   └── forecasters/  # Forecast metadata (SupplyDemandForecaster, .pkl)
     │   └── price_based/
     │       ├── forecasters/  # Forecast metadata (PriceForecaster, .pkl)
@@ -44,20 +34,20 @@ This repository contains the data associated with the following paper:
 
 ---
 
-## `source/`: raw data
+## 📦 `source/`: raw data
 
 | Folder | File(s) | Description | Units | Reference |
 |---|---|---|---|---|
 | `ENTSOE/` | `ENTSOE.csv` | Day-ahead power prices, load and NTC forecasts from the ENTSO-E Transparency Platform | Prices in €/MWh; load and NTC in MW | [ENTSO-E Transparency Platform](https://transparency.entsoe.eu/) |
-| `EPEX/` | `EPEX-DE-LU-aggregated-curves.parquet`<br>`EPEX-FR-aggregated-curves.parquet` | EPEX day-ahead market aggregated curves for the FR and DE-LU bidding zones | Prices (D) in €/MWh; volumes (Q) in MW | [EPEX SPOT market results](https://www.epexspot.com/en/market-results) |
+| `EPEX/` | `EPEX-{DE-LU,FR}-aggregated-curves.parquet` | EPEX day-ahead market aggregated curves for the FR and DE-LU bidding zones | Prices (D) in €/MWh; volumes (Q) in MW | [EPEX SPOT market results](https://www.epexspot.com/en/market-results) |
 | `GME/` | `MGP_bids.parquet` | Italian day-ahead market (MGP) bids. Extract of the "MGP Demand and Supply" dataset | Prices (`Prezzo`) in €/MWh; volumes (`Quantita`) in MW | [GME results](https://www.mercatoelettrico.org/en-us/Home/Results/Electricity/) |
 | | `MGP_coupling.csv` | Net position of Italy resulting from the single day-ahead market coupling (SDAC). Extract of the "MGP Market Coupling" dataset | Volumes in MW | |
 | | `MGP_prices.csv` | MGP prices for GME bidding zones. Extract of the "MGP Zonal Prices" dataset. The unconstrained price is the `NAT` column | Prices in €/MWh | |
-| `LSEG/` | `RES-forecast.csv` | Wind (onshore and offshore) and solar generation day-ahead forecasts from [LSEG Data & Analytics](https://www.lseg.com/en/data-analytics) | Volumes in MW | |
+| `LSEG/` | `RES-forecast.csv` | Wind (onshore and offshore) and solar generation day-ahead forecasts from LSEG Data & Analytics | Volumes in MW | [LSEG Data & Analytics](https://www.lseg.com/en/data-analytics) |
 
 ---
 
-## `processed/`: preprocessed data
+## 🔧 `processed/`: preprocessed data
 
 Intermediary datasets following data preprocessing, organized by market (`EPEX-DE-LU`, `EPEX-FR`, `GME`). Each market folder has the same files:
 
@@ -72,7 +62,7 @@ Intermediary datasets following data preprocessing, organized by market (`EPEX-D
 
 ---
 
-## `output/`: forecasts
+## 🎯 `output/`: forecasts
 
 Rolling curve-based and price-based forecasts for each market (`EPEX-DE-LU`, `EPEX-FR`, `GME`). All forecasts cover the period **2024-01-01 to 2024-12-31** (`20240101_20241231` in the file names).
 
@@ -86,14 +76,14 @@ Located in `output/<market>/curve_based/`:
 **File name pattern**
 
 ```text
-<spec>_1237_conc_017_<method>_dynamic_<a>_<b>_none_364_aic_20240101_20241231.pkl
+<spec>_1237_conc_017_<repr>_dynamic_<ks>_<kd>_none_364_aic_20240101_20241231.pkl
 ```
 
 The `Naive` benchmark is stored as `naive_20240101_20241231.pkl` (in `curves/` only).
 
-**Model to `<spec>` / `<method>`**
+**Model to `<spec>` / `<repr>`**
 
-| Model | `<spec>` | `<method>` |
+| Model | `<spec>` | `<repr>` |
 |---|---|---|
 | FPCA-ARX | `conc_none` | `fpca` |
 | FPCA-VARX | `conc_conc` | `fpca` |
@@ -105,7 +95,7 @@ The `Naive` benchmark is stored as `naive_20240101_20241231.pkl` (in `curves/` o
 | ZST-fVARX | `full_conc` | `zst` |
 | Naive | n/a | n/a |
 
-**`<a>_<b>` values per market and method**
+**`<ks>_<kd>` values per market and method**
 
 | Market | `fpca` | `zst` |
 |---|---|---|

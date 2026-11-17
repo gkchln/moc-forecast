@@ -12,16 +12,16 @@ Additionnally, a description of the _probabilistic_ forecasting component can be
 
 > Koechlin, G. (2026). **Data-driven models for electricity spot markets: monitoring, forecasting and strategic bidding**. _Doctoral dissertation, Politecnico di Milano_. [`hdl.handle.net/10589/262719`](https://hdl.handle.net/10589/262719)
 
-## Table of Contents
-- [Installation](#installation)
-- [Project structure](#project-structure)
-- [Basic usage](#basic-usage)
-- [Python modules](#python-modules)
-- [Paper replication](#paper-replication)
-- [License](#license)
-- [Authors](#authors)
+## 📚 Table of Contents
+- [Installation](#-installation)
+- [Repository structure](#-repository-structure)
+- [Python modules](#-python-modules)
+- [Basic usage](#-basic-usage)
+- [Paper replication](#-paper-replication)
+- [License](#-license)
+- [Authors](#-authors)
 
-## Installation
+## 📦 Installation
 
 It is assumed that users have Python **3.11** installed (and optionally Julia 1.12 for running price-based probabilistic forecasts, not necessary for paper replication).
 
@@ -56,30 +56,44 @@ environment:
 julia -e 'using Pkg; Pkg.add(["ArgParse", "PostForecasts", "ProgressBars", "HDF5"])'
 ```
 
-## Repository structure
+## 📁 Repository structure
 
 ```text
 moc_forecast/
 ├── data/                    # Local source, processed and output data (not included)
-├── results/                 # Plots and tables presenting the results
 ├── scripts/                 # Command-line scripts
 │   ├── curve_based/         # Curve construction and curve-based forecasts
 │   ├── price_based/         # Price-based forecasts
 │   ├── make_paper.py        # Generate paper figures and tables
 │   └── preprocess_data.py   # Prepare predictors and derived data
-├── src/                     # Python module containing models, preprocessing, evaluation, and utilities
+├── src/                     # Python source code
 ├── LICENSE
 └── requirements.txt         # Pinned Python dependencies
 ```
 
-## Basic usage
+## 🐍 Python modules
+
+- [`src/curves.py`](src/curves.py): Functional supply/demand curve containers,
+  curve transformations, and clearing-price calculations.
+- [`src/preprocessing.py`](src/preprocessing.py): Market-specific curve
+  constructors and exogenous-variable preparation.
+- [`src/models.py`](src/models.py): Regularized VARX model for curves' vector form and time-series models for residuals.
+- [`src/forecasters.py`](src/forecasters.py): Rolling curve and price
+  forecasting.
+- [`src/evaluation.py`](src/evaluation.py): Metrics, tests and utilities relative to model evaluation.
+- [`src/plots.py`](src/plots.py): Plotting functions
+- [`src/utils.py`](src/utils.py): Miscellaneous utilities.
+
+## 🚀 Basic usage
+
+_This section shows how to use the scripts in a generic way. For precise instructions on paper reproducibility, go to the next section._
 
 The repository does not include the raw market data or a ready-to-run sample
 dataset. The scripts expect locally supplied data under `data/source/` and
 intermediate files under `data/processed/` (see the replication section for more details). These directories are ignored by
 Git, so populate them yourself and retain any required data-use permissions.
 
-### 1. Build curves from bids
+### 🧱 Build curves from bids
 
 For an EPEX market:
 
@@ -107,7 +121,7 @@ builds a second curve file on a smaller, non-uniform optimized grid, with `_opt`
 filename.
 
 
-### 2. Run curve-based point forecasts
+### 📈 Run curve-based point forecasts
 
 This example uses the FPCA representation and explicit component counts. With
 `--choice_K none` (the default), both `--K_supply` and `--K_demand` are
@@ -137,7 +151,7 @@ The script saves a serialized forecaster under the output folder's
 `forecasters/` directory and, unless `--save_forecaster_only` is set, predicted
 curves under `curves/`.
 
-### 3. Run direct price-based point forecasts
+### 💶 Run direct price-based point forecasts
 
 The price-based baseline accepts a price CSV and a matching predictor CSV,
 both with a parseable datetime index. The endogenous price column is expected
@@ -160,7 +174,7 @@ python -m scripts.price_based.point_forecast \
 Note that here, `crosscorr_structure` must necessarily be set to `none`. The forecast CSV and serialized forecaster are written under the output
 folder's `prices/` and `forecasters/` directories.
 
-### 5. (Optional) Curve-based probabilistic price forecasting
+### 🎲 (Optional) Curve-based probabilistic price forecasting
 
 Use the forecaster pickle produced by the preceding point-forecast step:
 
@@ -180,7 +194,7 @@ python -m scripts.curve_based.probabilistic_forecast \
 This performs Monte Carlo simulation and stores price quantiles as a pickle.
 The exact forecaster filename is generated from the selected model settings.
 
-### 5. (Optional) Price-based price probabilistic forecasting
+### 🎲 (Optional) Price-based price probabilistic forecasting
 
 This pipeline takes the true and predicted price CSVs, invokes Julia to
 generate post-forecasts, and converts the output to pickle files:
@@ -202,44 +216,30 @@ Use method names supported by the installed `PostForecasts` package. Override
 `--julia` or `--julia_script` if Julia or the Julia script is not available at
 the default paths.
 
-## Python modules
 
-- [`src/curves.py`](src/curves.py): Functional supply/demand curve containers,
-  curve transformations, and clearing-price calculations.
-- [`src/preprocessing.py`](src/preprocessing.py): Market-specific curve
-  constructors and exogenous-variable preparation.
-- [`src/models.py`](src/models.py): Lasso VARX and hourly time-series models.
-- [`src/forecasters.py`](src/forecasters.py): Rolling curve and price
-  forecasting, plus probabilistic simulation support.
-- [`src/evaluation.py`](src/evaluation.py): Forecast and curve evaluation
-  helpers.
-- [`src/plots.py`](src/plots.py): Research and diagnostic visualizations.
-- [`src/utils.py`](src/utils.py): Shared time-series and numerical utilities.
+## 📄 Paper replication
 
+_This section describes the workflow to follow in order to reproduce the results of the paper._
 
-## Paper replication
-
-This section describes the workflow to follow in order to reproduce the results of the paper. 
-
-### 0. Hardware requirements
+### 💻 Hardware requirements
 
 Except for one specific part (see below), the entire pipeline can be run on an ordinary laptop, preferably with a Unix OS (MacOS, Linux) though most scripts should work fine on a Windows system, except for a couple of bash scripts that will work for Unix only. We ran it on a MacBook Pro equipped with an Apple M2 Pro chip with a 12-core CPU and 16GB of RAM. The **total execution time is ~10h**.
 
 The sensitivity analysis to the number of FPCs (section 3.5 of the paper), however, requires the use of a HPC cluster to keep running times manageable. We used 12 nodes an HPC cluster of 40 CPU nodes (each with two AMD EPYC 7413 24-core processors, 96 threads and 512 GB of RAM). The execution time for this part is ~36h.
 
-### 1. Get the data
+### 💾 1. Get the data
 
-The paper's companion dataset is hosted on Zenodo and includes:
+The paper's data is hosted on Zenodo:
+
+> Koechlin, G., Secchi, P., & Bovera, F. (2026). Data for "Day-Ahead Electricity Price Forecasting Using Merit-Order Curves Time Series" (Version v1.0) [Data set]. _Zenodo_. https://doi.org/10.5281/zenodo.24111524
+
+It includes:
 1. **Raw data**: paper inputs
 2. **Processed and output data**: intermediary and final outputs generated throughout this workflow
 
 More details can be found in the [`data/`](data/) directory's README file.
 
-Download: https://zenodo.org/records/YOUR_RECORD_ID
-
-Copy the content of the Zenodo repository in the `data/` directory.
-
-### 2. Build supply and demand curves from bids datasets (<5min)
+### 🧱 2. Build supply and demand curves from bids datasets (<5min)
 
 #### 2.a. For each EPEX market (`EPEX-FR` and `EPEX-DE-LU`), run:
 ```bash
@@ -261,7 +261,7 @@ python -m scripts.curve_based.build_curves data/source/GME/MGP_bids.parquet data
 
 The restricted curves dataset (main analysis) is saved under `data/processed/${MARKET}/sdts.pkl` while the full dataset with optimized price grid (secondary analysis, which results are presented in the appendix) is saved under `data/processed/${MARKET}/sdts_full_opt.pkl`.
 
-### 3. Preprocess data (<1min)
+### 🧹 3. Preprocess data (<1min)
 
 Data preprocessing beyond curves construction is done by [`scripts/preprocess_data.py`](scripts/preprocess_data.py) which, differently from the previous script, is not a configurable CLI. It takes as inputs:
 
@@ -285,7 +285,7 @@ Run it once with:
 python -m scripts.preprocess_data
 ```
 
-### 4. Backtest curves forecasting models (5-10h or 1-2 days depending on option chosen)
+### 🔁 4. Backtest curves forecasting models (5-10h or 1-2 days depending on option chosen)
 
 Two options are available:
 1. The first one (_light_ version, recommended) is to run backtests for all FPCA and ZST models for one $K_s, K_d$ pair only. This allows to reproduce all results except those of section 3.5 (sensitivity analysis to $K_s, K_d$).
@@ -387,7 +387,7 @@ bash scripts/curve_based/batch_point_forecast.sh "$MARKET" "$TRANSFORMER" "$TRAN
 ```
 Which makes 12 runs of `batch_point_forecast.sh` in total.
 
-### 5. Price-based clearing price forecasts (<30min)
+### 💶 5. Price-based clearing price forecasts (<30min)
 
 The price-based ARX, fARX and LEAR models must be run similarly as curve-based forecasts with `scripts/price_based/point_forecast.py`. There are 9 runs in total to perfom, three (ARX, fARX and LEAR) for each market:
 
@@ -414,7 +414,7 @@ python -m scripts.price_based.point_forecast --endog_path "data/processed/${MARK
 Results are stored at `data/output/${MARKET}/price_based/`.
 
 
-### 5. Produce results analysis (<10min)
+### 📊 6. Produce results analysis (<10min)
 
 Once forecasts are generated, [`scripts/make_paper.py`](scripts/make_paper.py) automatically generates figures and tables reported in the paper. You will need:
 1. Forecast results (price-based and curve-based) for each `MARKET` at `data/output/${MARKET}/`
@@ -444,12 +444,12 @@ Additionnally, if you ran the light version with `transformer_type='static'` as 
 python -m scripts.make_paper --output_folder data/output/${MARKET}/ --true_curves_path data/processed/${MARKET}/sdts.pkl --results_folder results/ --market $MARKET --static_vs_dynamic
 ```
 
-## License
+## ⚖️ License
 
 Apache License. Version 2.0, January 2004. [http://www.apache.org/licenses/](http://www.apache.org/licenses/)
 
 
-## Authors
+## 👤 Authors
 
 Guillaume KOECHLIN (`guillaume.koechlin@cea.fr`)
 
