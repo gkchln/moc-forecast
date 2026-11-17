@@ -501,6 +501,12 @@ Additionnally, if you ran the light version with `transformer_type='static'` as 
 python -m scripts.make_paper --output_folder data/output/${MARKET}/ --true_curves_path data/processed/${MARKET}/sdts.pkl --results_folder results/ --market $MARKET --static_vs_dynamic
 ```
 
+#### Add analysis results on unrestricted curves
+To generate the results of the analysis on the unrestricted curves, just change the paths:
+```bash
+python -m scripts.make_paper --output_folder path/to/unrestricted/outputs/${MARKET}/ --true_curves_path data/processed/${MARKET}/sdts_full_opt.pkl --results_folder path/to/unrestricted/results/ --market $MARKET
+```
+
 ## ⚖️ License
 
 Apache License. Version 2.0, January 2004. [http://www.apache.org/licenses/](http://www.apache.org/licenses/)
