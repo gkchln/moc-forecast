@@ -506,7 +506,7 @@ To generate the results of the analysis on the unrestricted curves, just change 
 python -m scripts.make_paper --output_folder path/to/unrestricted/outputs/${MARKET}/ --true_curves_path data/processed/${MARKET}/sdts_full_opt.pkl --results_folder path/to/unrestricted/results/ --market $MARKET
 ```
 
-## ⚖️ License
+## 📜 License
 
 Apache License. Version 2.0, January 2004. [http://www.apache.org/licenses/](http://www.apache.org/licenses/)
 
