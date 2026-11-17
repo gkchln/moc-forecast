@@ -6,7 +6,7 @@ This repository contains the code associated with the following paper:
 
 This work introduces a general, simple, and computationally efficient functional data analysis framework for forecasting day-ahead supply and demand merit-order (or aggregated) curves, and the resulting electricity price.
 
-Instructions to reproduce the results of the paper can be found in the [Paper replication](#paper-replication) section (assembled on 2026-11-13).
+Instructions to reproduce the results of the paper can be found in the [Paper replication](#-paper-replication) section (assembled on 2026-11-13).
 
 Additionnally, a description of the _probabilistic_ forecasting component can be found in the second chapter of the following PhD thesis:
 
@@ -225,7 +225,7 @@ _This section describes the workflow to follow in order to reproduce the results
 
 Except for one specific part (see below), the entire pipeline can be run on an ordinary laptop, preferably with a Unix OS (MacOS, Linux) though most scripts should work fine on a Windows system, except for a couple of bash scripts that will work for Unix only. We ran it on a MacBook Pro equipped with an Apple M2 Pro chip with a 12-core CPU and 16GB of RAM. The **total execution time is ~10h**.
 
-The sensitivity analysis to the number of FPCs (section 3.5 of the paper), however, requires the use of a HPC cluster to keep running times manageable. We used 12 nodes an HPC cluster of 40 CPU nodes (each with two AMD EPYC 7413 24-core processors, 96 threads and 512 GB of RAM). The execution time for this part is ~36h.
+The sensitivity analysis to the number of FPCs (section 3.5 of the paper), however, requires the use of a HPC cluster to keep running times manageable (although still long). We used 12 nodes an HPC cluster, each with two AMD EPYC 7413 24-core processors, 96 threads and 512 GB of RAM. The execution time for this part was ~36h.
 
 ### 💾 1. Get the data
 
@@ -239,29 +239,37 @@ It includes:
 
 More details can be found in the [`data/`](data/) directory's README file.
 
-### 🧱 2. Build supply and demand curves from bids datasets (<5min)
+### 🧱 2. Build supply and demand curves from bids datasets (<15min)
 
-#### 2.a. For each EPEX market (`EPEX-FR` and `EPEX-DE-LU`), run:
+#### For each EPEX market (`EPEX-FR` and `EPEX-DE-LU`), run:
 ```bash
 export MARKET=EPEX-FR # or EPEX-DE-LU
+# on Windows: `$MARKET="EPEX-FR"`
+```
 
+```bash
 # This will build the curves on the restricted domain
 python -m scripts.curve_based.build_curves data/source/EPEX/${MARKET}-aggregated-curves.parquet data/processed/${MARKET}/sdts.pkl --market ${MARKET} --restrict
-
+```
+If you want to reproduce the results of Appendix E, additionally build the curves on the unrestricted domain:
+```bash
 # This will build the curves on the full domain
 python -m scripts.curve_based.build_curves data/source/EPEX/${MARKET}-aggregated-curves.parquet data/processed/${MARKET}/sdts_full.pkl --market ${MARKET} --optimize_grid
 ```
 
-#### 2.b. For GME:
+#### For GME:
+You need to provide the file containing the single day-ahead coupling (SDAC) quantities:
 ```bash
 python -m scripts.curve_based.build_curves data/source/GME/MGP_bids.parquet data/processed/GME/sdts.pkl --coupling_path data/source/GME/MGP_coupling.csv --market GME --restrict
-
-python -m scripts.curve_based.build_curves data/source/GME/MGP_bids.parquet data/processed/GME/sdts_full.pkl --coupling_path data/source/GME/MGP_coupling.csv --market GME --optimize_grid
 ```
+Similarly to EPEX, remove `--restrict` and add the `--optimize_grid` flag to build unrestricted curves.
 
-The restricted curves dataset (main analysis) is saved under `data/processed/${MARKET}/sdts.pkl` while the full dataset with optimized price grid (secondary analysis, which results are presented in the appendix) is saved under `data/processed/${MARKET}/sdts_full_opt.pkl`.
 
-### 🧹 3. Preprocess data (<1min)
+The main curves dataset is saved under `data/processed/${MARKET}/sdts.pkl`.
+
+If built, the unrestricted curves dataset is saved under `data/processed/${MARKET}/sdts_full_opt.pkl`.
+
+### 🔧 3. Preprocess data (<1min)
 
 Data preprocessing beyond curves construction is done by [`scripts/preprocess_data.py`](scripts/preprocess_data.py) which, differently from the previous script, is not a configurable CLI. It takes as inputs:
 
@@ -285,11 +293,15 @@ Run it once with:
 python -m scripts.preprocess_data
 ```
 
+⚠️ For the analysis on unrestricted curves (Appendix E), you just need to manually change `data/processed/${MARKET}/sdts.pkl` to `data/processed/${MARKET}/sdts_full_opt.pkl` in the `preprocess_data.py`.
+
 ### 🔁 4. Backtest curves forecasting models (5-10h or 1-2 days depending on option chosen)
 
 Two options are available:
 1. The first one (_light_ version, recommended) is to run backtests for all FPCA and ZST models for one $K_s, K_d$ pair only. This allows to reproduce all results except those of section 3.5 (sensitivity analysis to $K_s, K_d$).
-2. The second one (_full_ version) is to run backtests for all FPCA and ZST models for _all_ $K_s, K_d$ pairs, which allows to replicate all paper results, including those of section 3.5. This option implies highly intensive and time-consuming calculations so we strongly encourage the use of a **HPC cluster** and the batch jobs scripts in case this option is chosen. Note that the running time amounts to ~1-2 days with 12 nodes of 96 cores each.
+2. The second one (_full_ version) is to run backtests for all FPCA and ZST models for _all_ $K_s, K_d$ pairs, which allows to reproduce all paper results, including those of section 3.5. This option implies highly intensive and time-consuming calculations so we strongly encourage the use of a **HPC cluster** and the batch job scripts. Note that the running time amounts to ~1-2 days with 12 nodes of 96 cores each.
+
+⚠️ For the analysis on unrestricted curves (Appendix E), you just need to manually change `data/processed/${MARKET}/sdts.pkl` to `data/processed/${MARKET}/sdts_full_opt.pkl` in the bash commands.
 
 #### 4.a. Light version (5-10h on PC)
 
@@ -340,7 +352,7 @@ python -m scripts.curve_based.point_forecast --endog_path "data/processed/${MARK
 ```
 Except for ARX, the script should use NumPy's built-in multithreading so running jobs in parallel won't make much difference in total execution time (should be a bit faster though), compared with running them in sequence.
 
-Alternatively, it is possible to use the batch script, which runs all four VAR models (ARX, VARX, fARX, fVARX) in parallel to reduce the number of runs from 24 to 6:
+Alternatively, if you are on Unix, it is possible to use the batch bash script, which runs all four VAR models (ARX, VARX, fARX, fVARX) in parallel to reduce the number of runs from 24 to 6:
 
 ```bash
 export MARKET=GME
@@ -361,10 +373,14 @@ The outputs of `point_forecast.py` are:
 -  Out-of-sample curves forecasts as a serialized `curves.SupplyDemandTimeSeries` instance (pickle file with `.pkl` extension) for 2024 at `data/output/${MARKET}/curve_based/curves/`.
 - A serialized `forecasters.SupplyDemandForecaster` instance which contains metadata and various parameters associated with the curves forecasts at `data/output/${MARKET}/curve_based/forecasters/`.
 
-**(Optional)** You can _additionnally_ run all previous models on each market with the _static_ approach for curves representation, which allows you to reproduce the results presented in Appendix D of the paper. Just change the `transformer_type` argument to `static` (`dynamic` by default):
+**(Optional)** To reproduce the results of Appendix D (_static_ vs _dynamic_ curve representation), you must run all configurations again with the _static_ approach for curves representation. Just change the `transformer_type` argument to `static` (`dynamic` by default):
 
 ```bash
-python -m scripts.curve_based.point_forecast --endog_path "data/processed/${MARKET}/sdts.pkl" --exog_path "data/processed/${MARKET}/predictors.csv" --save_folder "data/output/${MARKET}/curve_based" --K_supply $K_SUPPLY --K_demand $K_DEMAND --transformer $TRANSFORMER --autocorr_structure $AUTOCORR_STRUCTURE --crosscorr_structure $CROSSCORR_STRUCTURE --transformer_type static --progress
+export TRANS_TYPE=static
+```
+
+```bash
+python -m scripts.curve_based.point_forecast --endog_path "data/processed/${MARKET}/sdts.pkl" --exog_path "data/processed/${MARKET}/predictors.csv" --save_folder "data/output/${MARKET}/curve_based" --K_supply $K_SUPPLY --K_demand $K_DEMAND --transformer $TRANSFORMER --autocorr_structure $AUTOCORR_STRUCTURE --crosscorr_structure $CROSSCORR_STRUCTURE --transformer_type $TRANS_TYPE  --progress
 ```
 
 
@@ -376,13 +392,15 @@ Needs to be run for each market and transformer, i.e., 6 times:
 export MARKET=GME # ['GME', 'EPEX-FR', 'EPEX-DE-LU']
 export TRANSFORMER=fpca # ['fpca', 'zst']
 export TRANS_TYPE=dynamic
-export N_PARALLEL=48 # e.g. on a node with 96 cores
-export N_THREADS=2
+export N_PARALLEL=24 # e.g. on a node with 96 cores
+export N_THREADS=4
 
 export K_SUPPLY=5 # Match value for market and transformer in the table above
+# This will run ARX, fARX, VARX and fVARX for K_DEMAND ranging from 2 to 20
 bash scripts/curve_based/batch_point_forecast.sh "$MARKET" "$TRANSFORMER" "$TRANS_TYPE" "$K_SUPPLY" "2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20" "$N_PARALLEL" "$N_THREADS" # When K_SUPPLY is fixed
 
 export K_DEMAND=4 # Match value for market and transformer in the table above
+# This will run ARX, fARX, VARX and fVARX for K_SUPPLY ranging from 2 to 20
 bash scripts/curve_based/batch_point_forecast.sh "$MARKET" "$TRANSFORMER" "$TRANS_TYPE" "2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20" "$K_DEMAND" "$N_PARALLEL" "$N_THREADS" # When K_DEMAND is fixed
 ```
 Which makes 12 runs of `batch_point_forecast.sh` in total.
@@ -420,25 +438,64 @@ Once forecasts are generated, [`scripts/make_paper.py`](scripts/make_paper.py) a
 1. Forecast results (price-based and curve-based) for each `MARKET` at `data/output/${MARKET}/`
 2. The actual curves dataset for each `MARKET` at `data/processed/${MARKET}/sdts.pkl`
 
-Results (figures and tables) will be saved in `results/`. The table below shows the mapping between the figure/table filename in the directory and the figure/table number in the paper.
+Results (figures and tables) will be saved in `results/`. The table below shows the mapping between the figure/table number and the filename in the `results/` directory.
+
+> ⚠️ The output data included in the data repository allow to "lazily" reproduce the main figures and tables of the paper, i.e. all that present in the **main body** of the paper (except Figure 9 and 10) and in Appendices F, G and H. These data outputs are those obtained when running the _light_ version of the analysis without any additional option (unrestricted curves or static runs). We refer to this as _direct reproducibility_. On the contrary, any figure and table that require any of the full analysis, static runs or analysis on the unrestricted curves derive from outputs which are **not** included in the data repository and must consequently be generated with step 4 of the workflow.
+
+| Item | File(s) / Content | Comment |
+|:----:|-------------------|---------|
+| Figure 4 | `approx_curve_ev_*.png`, `approx_mcp_mae_*.png` | ✅ Direct reproducibility |
+| Table 4 | `curve_avg_error_supply_gme.csv` | ✅ Direct reproducibility |
+| Figure 5 | `curve_mae_*.png` | ✅ Direct reproducibility |
+| Table 5 | `curve_avg_error_supply_epex-de-lu.csv` | ✅ Direct reproducibility |
+| Table 6 | `curve_avg_error_supply_epex-fr.csv` | ✅ Direct reproducibility |
+| Table 7 | `price_point_error_*.csv` | ✅ Direct reproducibility |
+| Figure 6 | `dm_test_prices_daily_*.png` | ✅ Direct reproducibility |
+| Figure 7 | `hourly_mae_prices_*.png` | ✅ Direct reproducibility |
+| Figure 8 | `dm_test_prices_hourly_*.png` | ✅ Direct reproducibility |
+| Figure 9 | `sens_Ks_mae_supply_*.png`, `sens_Kd_mae_demand_*.png` | ⚠️ Requires full analysis|
+| Figure 10 | `sens_Ks_mae_mcp_*.png`, `sens_Kd_mae_mcp_*.png` | ⚠️ Requires full analysis |
+| Table D.9 | `curve_fmae_supply_stat_vs_dyna_*.csv` | ⚠️ Requires static runs |
+| Table D.10 | `curve_fmae_demand_stat_vs_dyna_*.csv` | ⚠️ Requires static runs |
+| Table D.11 | `price_mae_static_vs_dyna_*.csv` | ⚠️ Requires static runs |
+| Figure E.11 | `approx_curve_ev_*.png`, `approx_mcp_mae_*.png` | ⚠️ Requires light analysis on unrestricted curves |
+| Table E.14 | `curve_avg_error_supply_gme.csv` | ⚠️ Requires light analysis on unrestricted curves |
+| Figure E.12 | `curve_mae_*.png` | ⚠️ Requires light analysis on unrestricted curves |
+| Table E.15 | `curve_avg_error_supply_epex-de-lu.csv` | ⚠️ Requires light analysis on unrestricted curves |
+| Table E.16 | `curve_avg_error_supply_epex-fr.csv` | ⚠️ Requires light analysis on unrestricted curves |
+| Table E.17 | `price_point_error_*.csv` | ⚠️ Requires light analysis on unrestricted curves |
+| Figure E.13 | `dm_test_prices_daily_*.png` | ⚠️ Requires light analysis on unrestricted curves |
+| Figure E.14 | `hourly_mae_prices_*.png` | ⚠️ Requires light analysis on unrestricted curves |
+| Figure E.15 | `dm_test_prices_hourly_*.png` | ⚠️ Requires light analysis on unrestricted curves |
+| Figure E.16 | `sens_Ks_mae_supply_*.png`, `sens_Kd_mae_demand_*.png` | ⚠️ Requires full analysis on unrestricted curves |
+| Figure E.17 | `sens_Ks_mae_mcp_*.png`, `sens_Kd_mae_mcp_*.png` | ⚠️ Requires full analysis on unrestricted curves |
+| Figure F.18 | `fpc_supply_gme.png`, `fpc_demand_gme.png` | ✅ Direct reproducibility |
+| Figure F.19 | `fpc_supply_epex-de-lu.png`, `fpc_demand_epex-de-lu.png` | ✅ Direct reproducibility |
+| Figure F.20 | `fpc_supply_epex-fr.png`, `fpc_demand_epex-fr.png` | ✅ Direct reproducibility |
+| Figure F.21 | `fpc_effect_supply_*.png` | ✅ Direct reproducibility |
+| Figure F.22 | `fpc_effect_demand_*.png` | ✅ Direct reproducibility |
+| Figure G.23 | `dm_test_supply_*.png`, `dm_test_demand_*.png` | ✅ Direct reproducibility |
+| Figure H.24 | `*_pred_gme.png` | ✅ Direct reproducibility |
+| Figure H.25 | `*_pred_epex-de-lu.png` | ✅ Direct reproducibility |
+| Figure H.26 | `*_pred_epex-fr.png` | ✅ Direct reproducibility |
 
 
 
-#### 5.a. Light version
-
-If you just ran the light version of the analysis, run:
+#### Light version (direct reproducibility)
+Run for each market:
 ```bash
 export MARKET=GME # ['GME', 'EPEX-FR', 'EPEX-DE-LU']
 python -m scripts.make_paper --output_folder data/output/${MARKET}/ --true_curves_path data/processed/${MARKET}/sdts.pkl --results_folder results/ --market $MARKET
 ```
 
-#### 5.b. Full version
+#### Full version
 
-If you just ran the full version of the analysis, add the `--sensitivity_nb_components` flag:
+If you ran the full version of the analysis, add the `--sensitivity_nb_components` flag:
 ```bash
 python -m scripts.make_paper --output_folder data/output/${MARKET}/ --true_curves_path data/processed/${MARKET}/sdts.pkl --results_folder results/ --market $MARKET --sensitivity_nb_components
 ```
 
+#### Add static vs dynamic comparison (Appendix D)
 Additionnally, if you ran the light version with `transformer_type='static'` as well, you can include the comparison of the static vs dynamic curve transformation approaches by adding the `--static_vs_dynamic` flag:
 ```bash
 python -m scripts.make_paper --output_folder data/output/${MARKET}/ --true_curves_path data/processed/${MARKET}/sdts.pkl --results_folder results/ --market $MARKET --static_vs_dynamic
