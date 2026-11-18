@@ -519,5 +519,5 @@ Apache License, Version 2.0, January 2004. [http://www.apache.org/licenses/](htt
 
 ## 👤 Authors
 
-Guillaume KOECHLIN (`guillaume.koechlin@cea.fr`)
+Guillaume KOECHLIN (`guillaume.koechlin@polimi.it`, `guillaume.koechlin@cea.fr`)
 
